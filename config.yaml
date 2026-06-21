@@ -1,0 +1,30 @@
+sqlite:
+  drivername: sqlite
+  database: stock_test.db
+postgresql:
+  drivername: postgresql+psycopg2
+  host: 'localhost'
+  port: 5433
+  username: postgres
+  password: ${PG_PASSWORD:-postgres_pwd}
+  database: stock
+
+slb:
+  # base_dir: ${SLB_HISTORY:-.}
+  base_dir: E:/stock_/SLB-history
+  user_diy_data: userdiydata_802.txt
+  user_diy_data_by_date: userdiydata_801_{date}.txt
+
+tdx:
+  base_dir: D:/finance_tool_/new_tdx
+
+tushare:
+  token: ${TUSHARE_TOKEN:?请设置环境变量 TUSHARE_TOKEN，从 https://tushare.pro 获取}
+
+firecrawler:
+  api_key: ${FIRECRAWLER_API_KEY:?请设置环境变量 FIRECRAWLER_API_KEY}
+
+mootdx:
+  # ip: 112.74.214.43
+  ip: 115.238.56.198
+  port: 7709
