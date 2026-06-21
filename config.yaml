@@ -3,15 +3,14 @@ sqlite:
   database: stock_test.db
 postgresql:
   drivername: postgresql+psycopg2
-  host: 'localhost'
-  port: 5433
-  username: postgres
-  password: ${PG_PASSWORD:-postgres_pwd}
-  database: stock
+  host: ${PG_HOST:?请设置环境变量 PG_HOST（数据库主机地址）}
+  port: ${PG_PORT:-5433}
+  username: ${PG_USERNAME:?请设置环境变量 PG_USERNAME（数据库用户名）}
+  password: ${PG_PASSWORD:?请设置环境变量 PG_PASSWORD（数据库密码）}
+  database: ${PG_DATABASE:?请设置环境变量 PG_DATABASE（数据库名称）}
 
 slb:
-  # base_dir: ${SLB_HISTORY:-.}
-  base_dir: E:/stock_/SLB-history
+  base_dir: ${SLB_HISTORY:?请设置环境变量 SLB_HISTORY（扫雷宝历史数据目录）}
   user_diy_data: userdiydata_802.txt
   user_diy_data_by_date: userdiydata_801_{date}.txt
 
