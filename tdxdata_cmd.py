@@ -1983,6 +1983,7 @@ def formula_multi(
     is_save_memory: bool,
     group_index: int,
     is_save_df: bool,
+    **kwargs,
 ):
     """批量通达信选股公式"""
     # 注：无需使用formula_set_data和formula_set_data_info提前设置，formula_set_data和formula_set_data_info的设置也对批量调用不生效
