@@ -316,13 +316,12 @@ def _trans_xg_data_to_date2stocks(data: dict, dates: list[str],
             columns[code] = [None] * len(dates)
         elif len(values) != len(dates):
             skipped.append(code)
-            W(f"股票 {code} 的数据长度 ({len(values)}) 与交易日数量 ({len(dates)}) 不匹配，已跳过",
-              _level='FORMULA')
+            W(f"股票 {code} 的数据长度 ({len(values)}) 与交易日数量 ({len(dates)}) 不匹配，已跳过")
         else:
             columns[code] = values
 
     if skipped:
-        W(f"共跳过 {len(skipped)} 只数据长度不匹配的股票: {skipped}", _level='FORMULA')
+        W(f"共跳过 {len(skipped)} 只数据长度不匹配的股票: {skipped}")
 
     df = pd.DataFrame(columns, index=pd.to_datetime(dates))
 
@@ -332,26 +331,33 @@ def _trans_xg_data_to_date2stocks(data: dict, dates: list[str],
 
     # 3. 统计与生成结果
     # 计算每一行（日期）中值为 1 的股票列表
-    def get_stocks(row):
-        code_list = row.index[row == 1].tolist()
+    def get_stocks_info(row):
+        codes = row.index[row == 1].tolist()
         if is_with_name:
-            code_list = [f"{code}|{get_stock_name(code)}" for code in code_list]
-        return code_list
+            names = [get_stock_name(code) for code in codes]
+            return codes, names
+        return codes, None
 
-    # 构造最终需要的 DataFrame
+    # 计算基础统计
+    counts = df.sum(axis=1).astype(int)
+
+    # 提取 info
+    info = df.apply(get_stocks_info, axis=1)
+
+    # 3. 构造最终 DataFrame
+    result_data = {
+        'date': df.index,
+        'count': counts,
+        'stocks': [x[0] for x in info]
+    }
+
     if is_with_name:
-        result_df = pd.DataFrame({
-            'date': df.index,
-            'count': df.sum(axis=1).astype(int),
-            'stocks with name': df.apply(get_stocks, axis=1)
-        }).reset_index(drop=True)
+        result_data['stocks with name'] = [
+            [f"{c}|{n}" for c, n in zip(codes, names)] if names else codes
+            for codes, names in info
+        ]
 
-    else:
-        result_df = pd.DataFrame({
-            'date': df.index,
-            'count': df.sum(axis=1).astype(int),
-            'stocks': df.apply(get_stocks, axis=1)
-        }).reset_index(drop=True)
+    result_df = pd.DataFrame(result_data).reset_index(drop=True)
 
     return result_df
 
@@ -1740,6 +1746,10 @@ def formula(
 
     CONSOLE = _ctx.obj['console'] # type: Console
 
+    if not stocks:
+        CONSOLE.print("⚠️ 股票列表为空，请使用 -s/--stock （或在 memory-cache 命令中缓存）指定。")
+        return
+
     _ft_name = {
         'zb': '技术指标',
         'xg': '条件选股',
@@ -1836,7 +1846,9 @@ def formula(
                 if value_of_res and len(value_of_res) > 0:
                     value_of_res_VALUES_LIST = list(value_of_res.values())
                     cnt_of_res = len(value_of_res_VALUES_LIST[0])
-                    CONSOLE.print(f"指标有{len(value_of_res)}个数，涵盖 {cnt_of_res} 天")
+
+                    if verbose:
+                        CONSOLE.print(f"指标有{len(value_of_res)}个数，涵盖 {cnt_of_res} 天")
 
                     if cnt_of_res < count:
                         CONSOLE.print(f"⚠️ 返回指标天数 < 请求的数量({count})")
@@ -1865,11 +1877,13 @@ def formula(
                         if not df.empty:
                             print_dataframe(df, title=f"{full_code} {get_stock_name(full_code)} 在技术指标 {name} 的输出（未过滤空值）",
                                             table_max_rows=max_to_show, printer=CONSOLE.print)
+
                     # 3. 后续打印或处理使用 df_cleaned
-                    if not df_cleaned.empty:
-                        print_dataframe(df_cleaned, title=f"{full_code} {get_stock_name(full_code)} 在技术指标 {name} 的输出（已过滤空值）",
-                                        table_max_rows=max_to_show, printer=CONSOLE.print)
-                    
+                    if formula_type == 'zb' or verbose: # 指标公式（除非 verbose）不显示
+                        if not df_cleaned.empty:
+                            print_dataframe(df_cleaned, title=f"{full_code} {get_stock_name(full_code)} 在技术指标 {name} 的输出（已过滤空值）",
+                                            table_max_rows=max_to_show, printer=CONSOLE.print)
+
                     if not df_cleaned.empty:
                         code_2_df[full_code] = df_cleaned
                     else:
@@ -1878,18 +1892,26 @@ def formula(
         if verbose:
             CONSOLE.print(f"code_2_value = {code_2_value}")
 
+            CONSOLE.print(f"res_df = ", end='')
+            CONSOLE.print(Pretty(res_df))
+
         if formula_type == 'zb':
             return {'dfs': code_2_df}
         if formula_type == 'xg':
             # NOTICE: 选股公式，输出都是 OUTPUT1 中，被选中的 str(OUTPUT1) == "1"
             res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates, field_be_counted='OUTPUT1', is_with_name=is_with_name)
-            print_dataframe(res_df, title='选股结果', printer=CONSOLE.print)
+
+            print_dataframe(res_df, title='选股结果', flatten_list=True,
+                            exclude_cols=['stocks'] if is_with_name else [], printer=CONSOLE.print)
+            # return {'stocks': code_2_df.keys()}
         elif formula_type == 'exp':
             res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates, field_be_counted='ENTERLONG', is_with_name=is_with_name)
-            print_dataframe(res_df, title='专家系统 买入信号（ENTERLONG）统计结果', printer=CONSOLE.print)
+            print_dataframe(res_df, title='专家系统 买入信号（ENTERLONG）统计结果',
+                            exclude_cols=['stocks'] if is_with_name else [], printer=CONSOLE.print)
 
             res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates, field_be_counted='EXITLONG', is_with_name=is_with_name)
-            print_dataframe(res_df, title='专家系统 卖出信号（EXITLONG）统计结果', printer=CONSOLE.print)
+            print_dataframe(res_df, title='专家系统 卖出信号（EXITLONG）统计结果',
+                            exclude_cols=['stocks'] if is_with_name else [], printer=CONSOLE.print)
 
 
 
