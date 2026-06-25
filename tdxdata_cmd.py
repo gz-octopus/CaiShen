@@ -409,11 +409,70 @@ def refresh_kline(_ctx: click.Context, stocks: list[str], period: str):
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, required=True, help='股票代码列表 (如: 688318.SH)')
+@click.option('--time', '-t', 'time_list', multiple=True, callback=split_comma_datetime, help='')
+@click.option('--data', '-d', 'data_list', multiple=True, callback=split_comma, help='数据列表（每个字段以“|”分隔）')
+@click.pass_context
+def send_bt_data(_ctx: click.Context,
+                 stocks: list[str],
+                 time_list: list[datetime],
+                 data_list: list[str],
+                 ):
+    """往客户端发送指定股票的回测数据"""
+    CONSOLE = _ctx.obj['console'] # type: Console
+    try:
+        for full_code in stocks:
+            bt_data = tq.send_bt_data(stock_code=full_code,
+                                    time_list = [x.strftime('%Y%m%d%H%M%S') for x in time_list],
+                                    data_list=[d.split('|') for d in data_list],
+                                    count=len(data_list)),
+            
+            CONSOLE.print(f"发送 {full_code} 的回测数据，返回: {bt_data}")
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+def _categorize_securities(data: list[dict]) -> pd.DataFrame:
+    processed_data = []
+
+    for item in data:
+        code = item['Code']
+        s_code = SecurityCode(code)
+        sec_type = s_code.security_type.chinese_name if s_code.security_type else "Unknown"
+
+        processed_data.append({
+            'code': f"{code}|{item['Name']}",
+            'type': sec_type
+        })
+
+    # 转换为 DataFrame
+    df = pd.DataFrame(processed_data)
+
+    # 按 type 归类：聚合 code 和计算数量
+    result_df = df.groupby('type').agg(
+        count=('code', 'count'),
+        codes=('code', list)
+    ).reset_index()
+
+    return result_df
+
+
+@command_with_abbrev(abbrev='gmsi', context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--key-word', '-k', '-s', 'key_word', help='关键词')
 @click.pass_context
 def get_match_stkinfo(_ctx: click.Context, key_word: str):
     """检索证券信息"""
-    tq.get_match_stkinfo(key_word)
+    CONSOLE = _ctx.obj['console'] # type: Console
+    try:
+        res = tq.get_match_stkinfo(key_word)
+        if not res:
+            CONSOLE.print(f'关键字 [yellow]{key_word}[/yellow]，查无数据')
+            return
+        display_df = _categorize_securities(res)
+        print_dataframe(display_df, title=f'含有 [yellow]{key_word}[/yellow] 的证券信息')
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
 
 # todo:
 def get_trackzs_etf_info():
