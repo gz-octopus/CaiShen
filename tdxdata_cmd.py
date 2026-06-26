@@ -1180,6 +1180,10 @@ def get_sector_list(_ctx: click.Context,
 ):
     """获取A股板块代码列表（通达信板块、概念、行业等88开头的板块）"""
     CONSOLE = _ctx.obj['console']
+    # 管道模式：当本命令处于管道非末段（左侧/中间），后面有下游命令时，
+    # 即使没有 -sm 也应该遍历板块获取成份股并返回，供下一段消费
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
+
     try:
         # 获取数据并转换为 DataFrame
         sectors = tq.get_sector_list(list_type=1)  # 始终获取详细信息以供后续过滤
@@ -1194,7 +1198,7 @@ def get_sector_list(_ctx: click.Context,
 
             print_dataframe(df_filtered, title=f'含有 {contains} 的板块（{len(df_filtered)} / {len(df)}）', printer=CONSOLE.print)
 
-            if is_save_memory or is_verbose:
+            if is_save_memory or is_verbose or _is_pipe_producer:
                 stocks_in_filtered_sectors = set()
 
                 # 直接遍历过滤后的 DataFrame
@@ -1204,12 +1208,12 @@ def get_sector_list(_ctx: click.Context,
 
                     if is_verbose:
                         CONSOLE.print(f"板块 [yellow]{sector_code}[/yellow] ({row['Name']}) 中含有 {len(res)} 只个股：", end='')
-                        CONSOLE.print([f"{r.get('Code')} {r.get('Name')}" for r in res if isinstance(r, dict)])
+                        CONSOLE.print([f"{r.get('Code')}|{r.get('Name')}" for r in res if isinstance(r, dict)])
 
-                    if is_save_memory and res:
+                    if (is_save_memory or _is_pipe_producer) and res:
                         stocks_in_filtered_sectors.update([_get(x) for x in res if x])
 
-                if is_save_memory:
+                if is_save_memory or _is_pipe_producer:
                     return {'stocks': stocks_in_filtered_sectors}
 
         else:
@@ -1237,6 +1241,7 @@ def get_stock_list_in_sector(
     is_save_memory: bool,
     group_index: int,
     max_to_show: int,
+    **kwargs,
 ):
     """根据板块代码（SecurityType: TDX_INDEX）获取其成份股列表
     注：block_code 从 get_sector_list 获取
@@ -1269,6 +1274,8 @@ def get_stock_list_in_sector(
     print_locals()
 
     CONSOLE = _ctx.obj['console'] # type: Console
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
+
     try:
         stocks_result = set()
         res = tq.get_stock_list_in_sector(block_code=block_name,
@@ -1277,7 +1284,7 @@ def get_stock_list_in_sector(
         CONSOLE.print(f"板块 [yellow]{block_name}[/yellow] 中含有 {len(res)} 只个股：", end='')
         CONSOLE.print(Pretty(res, max_length=max_to_show) if (res and max_to_show > 0) else res)
 
-        if is_save_memory:
+        if is_save_memory or _is_pipe_producer:
             if res and isinstance(res, list):
                 stocks_result.update(set([_get(x) for x in res if x]))
 
@@ -1361,6 +1368,7 @@ def get_stocks(_ctx: click.Context,
     """获取系统分类成份股（通过指定 市场代码 或 市场名称）"""
     print_locals()
     CONSOLE = _ctx.obj['console'] # type: Console
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     try:
         if not (markets or market_name_contains) or list_all:
@@ -1401,10 +1409,10 @@ def get_stocks(_ctx: click.Context,
 
                         CONSOLE.print(Pretty(res, max_length=max_to_show) if max_to_show > 0 else res)
 
-                        if is_save_memory and isinstance(res, list):
+                        if (is_save_memory or _is_pipe_producer) and isinstance(res, list):
                             stocks_result.update([_get(x) for x in res if x])
 
-            if is_save_memory:
+            if is_save_memory or _is_pipe_producer:
                 I(stocks_result_LEN=len(stocks_result))
                 return {'stocks': stocks_result}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
 
@@ -1544,6 +1552,7 @@ def user_sector(
 ):
     """获取自定义板块中的股票列表（需要先使用 get_user_sector 获取板块列表）"""
     CONSOLE = _ctx.obj['console'] # type: Console
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     action = action.lower()
 
@@ -1592,17 +1601,17 @@ def user_sector(
                     if show_on_tdx:
                         tq.send_user_block(block_code=_code, stocks=_stocks, show=True) # 把最后一个显示在客户端
 
-                    if is_save_memory:
+                    if is_save_memory or _is_pipe_producer:
                         stocks_in_filtered_sectors.update(set([_get(x) for x in _stocks if x]))
 
-                if is_save_memory:
+                if is_save_memory or _is_pipe_producer:
                         return {'stocks': stocks_in_filtered_sectors}
             else:
                 CONSOLE.print(f"自定义板块列表（共 {len(sectors)} 个）: ", end='')
                 CONSOLE.print(Pretty(sectors))
 
             # 当 action == get 时，-sm 参数可存储板块中的个股到 cache_cmd.STOCKS 中，供后续命令使用
-            if is_save_memory:
+            if is_save_memory or _is_pipe_producer:
                 stocks_in_sectors = set()
                 for sector_info in sectors:
                     _code = sector_info.get('Code', '')
@@ -2092,6 +2101,7 @@ def formula_multi(
     print_locals()
 
     CONSOLE = _ctx.obj['console'] # type: Console
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     try:
         formula_arg = ','.join(args)
@@ -2144,10 +2154,10 @@ def formula_multi(
 
                             CONSOLE.print(f"{date} 选出 {len(stocks)} 只股票，存于自定义板块 [yellow]{usr_block_name}[/yellow] 内。")
 
-                    if is_save_memory:
+                    if is_save_memory or _is_pipe_producer:
                         stocks_on_date.update(stocks)
 
-                if is_save_memory:
+                if is_save_memory or _is_pipe_producer:
                     return {'stocks': stocks_on_date}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
 
         elif formula_type == 'zb':
