@@ -177,12 +177,26 @@ def _zb_multi_result_to_dataframe(mul_res: dict, index=['stock_code', 'date'], c
         if not isinstance(stock_data, dict):
             continue
 
-        # 获取该股票的所有指标数据
-        indicators = {}
-        date_values = {}
+        # 过滤出包含实际数据的指标（列表元素为带 'Date' 和 'Value' 键的 dict）
+        # 排除纯描述性指标（如 ["主买净额(万)"]）
+        def _is_data_indicator(indicator_data):
+            return (
+                isinstance(indicator_data, list)
+                and len(indicator_data) > 0
+                and isinstance(indicator_data[0], dict)
+                and 'Date' in indicator_data[0]
+            )
 
-        # 首先收集所有日期（从任意一个指标获取）
-        first_indicator = next(iter(stock_data.values()))
+        data_indicators = {
+            k: v for k, v in stock_data.items()
+            if _is_data_indicator(v)
+        }
+
+        if not data_indicators:
+            continue
+
+        # 首先收集所有日期（从任意一个数据指标获取）
+        first_indicator = next(iter(data_indicators.values()))
         dates = [item['Date'] for item in first_indicator]
 
         # 为每个日期创建一行数据
@@ -192,8 +206,8 @@ def _zb_multi_result_to_dataframe(mul_res: dict, index=['stock_code', 'date'], c
                 'date': date
             }
 
-            # 遍历所有指标
-            for indicator_name, indicator_data in stock_data.items():
+            # 遍历所有数据指标
+            for indicator_name, indicator_data in data_indicators.items():
                 # 确保索引有效
                 if date_idx < len(indicator_data):
                     row[indicator_name] = indicator_data[date_idx]['Value']
