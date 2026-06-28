@@ -1163,11 +1163,6 @@ def get_gp_one_data(_ctx: click.Context,
 
 # ---------------------------------------------------------------------------------------------
 # 分类/板块成份股
-
-        import pandas as pd
-
-# ---------------------------------------------------------------------------------------------
-# 分类/板块成份股
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @stocks_collector
 @click.option('-c', '--contains', 'contains', multiple=True, callback=split_comma, help='包含的字串')
