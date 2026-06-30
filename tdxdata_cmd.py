@@ -568,7 +568,7 @@ def get_market_data(_ctx: click.Context,
                     print_dataframe(stock_df, title=f"股票数据 {code} （{period}）K线数据",
                                     show_footer=True, printer=CONSOLE.print)
                 if is_save_db:
-                    save_to_db(stock_df, code, period, CONSOLE, db_url)
+                    _save_to_db(stock_df, code, 'history_data_1d', CONSOLE, db_url)
 
             return {'dfs': stock_2_df}
 
@@ -580,85 +580,153 @@ def get_market_data(_ctx: click.Context,
 
 
 
-def save_to_db(df: pd.DataFrame, code: str, period: str,
-               console: Console, db_url: str):
-    """保存数据到数据库"""
-    from difoss_stock_util.metric_data.history_data_1d import HistoryData1D
-    # from difoss_stock_util.metric_data.history_data_1m import HistoryData1M
+# ---------------------------------------------------------------------------------------------
+# 共享的 K 线数据入库辅助函数（供 get_market_data --save-db 和 save-to-db 命令共用）
 
-    HistoryData1D.init_db(db_url)
+# 表名 → ORM 模型类 的映射（支持按需扩展）
+def _get_model_for_table(table_name: str):
+    """根据表名获取对应的 ORM 模型类"""
+    _TABLE_MODEL_MAP = {
+        'history_data_1d': ('difoss_stock_util.metric_data.history_data_1d', 'HistoryData1D'),
+    }
+    info = _TABLE_MODEL_MAP.get(table_name)
+    if not info:
+        return None
+    import importlib
+    module = importlib.import_module(info[0])
+    return getattr(module, info[1])
 
-    s_code = SecurityCode(code)
 
-    if df.empty:
+def _df_row_to_record(date_idx, row: pd.Series, exchange_id: str, instrument_id: str) -> dict:
+    """将 DataFrame 的一行转换为数据库记录 dict"""
+    trade_date = date_idx.date() if isinstance(date_idx, pd.Timestamp) else pd.to_datetime(date_idx).date()
+    return {
+        'ExchangeID': exchange_id,
+        'InstrumentID': instrument_id,
+        'trade_date': trade_date,
+        'open': float(row['Open']) if pd.notna(row.get('Open')) else None,
+        'close': float(row['Close']) if pd.notna(row.get('Close')) else None,
+        'high': float(row['High']) if pd.notna(row.get('High')) else None,
+        'low': float(row['Low']) if pd.notna(row.get('Low')) else None,
+        'volume': int(row['Volume']) if pd.notna(row.get('Volume')) else 0,
+        'amount': float(row['Amount']) if pd.notna(row.get('Amount')) else None,
+        'suspend_flag': False,
+    }
+
+
+def _save_kline_to_db_table(dfs: dict, table_name: str, db_url: str,
+                             is_replace: bool, console: Console) -> int:
+    """通用 K 线数据入库（支持管道和内部调用）
+
+    Args:
+        dfs: {stock_code: DataFrame} 格式，DataFrame 索引为日期，列含 Open/Close/High/Low/Volume/Amount
+        table_name: 目标数据库表名（如 history_data_1d）
+        db_url: 数据库连接 URL
+        is_replace: 是否替换已存在的记录
+        console: Rich Console 实例
+
+    Returns:
+        成功插入的总记录数
+    """
+    model_cls = _get_model_for_table(table_name)
+    if not model_cls:
+        console.print(f"[red]不支持的表名: {table_name}[/red]")
+        return 0
+
+    model_cls.init_db(db_url)
+    total_inserted = 0
+
+    for code, df in dfs.items():
+        if df.empty:
+            continue
+
+        s_code = SecurityCode(code)
+        exchange_id = s_code.market_code
+        instrument_id = s_code.short_code
+
+        # 构建记录列表
+        records = [_df_row_to_record(idx, row, exchange_id, instrument_id)
+                   for idx, row in df.iterrows()]
+
+        if not records:
+            continue
+
+        # 批量插入
+        with model_cls.get_session() as session:
+            for i in range(0, len(records), 1000):
+                batch = records[i:i + 1000]
+                try:
+                    session.bulk_insert_mappings(model_cls, batch)
+                    session.commit()
+                    total_inserted += len(batch)
+                except Exception as e:
+                    session.rollback()
+                    if is_replace:
+                        # 逐条 upsert
+                        for record in batch:
+                            try:
+                                session.add(model_cls(**record))
+                                session.commit()
+                                total_inserted += 1
+                            except Exception:
+                                session.rollback()
+                    else:
+                        # 尝试逐条插入（跳过重复键）
+                        for record in batch:
+                            try:
+                                session.add(model_cls(**record))
+                                session.commit()
+                                total_inserted += 1
+                            except Exception:
+                                session.rollback()
+
+    console.print(f"✅ 成功插入 {total_inserted} 条记录到 [yellow]{table_name}[/yellow]")
+    return total_inserted
+
+
+def _save_to_db(df: pd.DataFrame, code: str, table_name: str,
+                console: Console, db_url: str, is_replace: bool = False):
+    """保存单只股票的 K 线数据到数据库（供 get_market_data --save-db 内部调用）"""
+    _save_kline_to_db_table({code: df}, table_name, db_url, is_replace, console)
+
+
+# ---------------------------------------------------------------------------------------------
+# 数据库保存命令（管道友好）
+@command_with_abbrev(abbrev='std', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--table', '-t', 'table_name', required=True,
+              help='目标数据库表名（如: history_data_1d）')
+@click.option('--replace', '-r', 'is_replace', is_flag=True,
+              help='替换已存在的记录（默认跳过重复键）')
+@click.pass_context
+def save_to_db(_ctx: click.Context, table_name: str, is_replace: bool):
+    """将管道传入的 K 线数据保存到数据库表（缩写: std）
+
+    用法示例：
+        gmd -c 100 -s 600000.SH | save-to-db -t history_data_1d
+        gmd -c 100 -s 600000.SH | std -t history_data_1d -r
+    """
+    CONSOLE = _ctx.obj['console']
+    CFG = _ctx.obj['cfg']
+    db_url = CFG.get('db_url')
+
+    if not db_url:
+        CONSOLE.print("[red]config.yaml 中未配置 db_url[/red]")
         return
 
-    if period == '1d':
-        with HistoryData1D.get_session() as session:
-            execute_batch_insert(df, s_code.short_code, s_code.market_code, session)
-            HistoryData1D.batch_insert()
-    else:
-        console.print(f"暂不支持保存周期为 {period} 的数据到数据库")
+    # 从管道上游获取数据
+    pipe_data = _ctx.obj.get('_pipe_data', {})
+    if not pipe_data:
+        CONSOLE.print("[red]无管道传入数据[/red]")
+        CONSOLE.print("用法示例: [yellow]gmd -c 100 -s 600000.SH | save-to-db -t history_data_1d[/yellow]")
+        return
 
-    # elif period == '1m':
-    #     HistoryData1M.insert_from_dataframe(df, code, 'SH', replace_existing=True)
+    dfs = pipe_data.get('dfs', {})
+    if not dfs:
+        CONSOLE.print("[red]管道数据中未包含 DataFrame（缺少 'dfs' 键）[/red]")
+        CONSOLE.print(f"上游返回的键: {list(pipe_data.keys())}")
+        return
 
-
-def execute_batch_insert(df: pd.DataFrame,
-                        exchange_id: str,
-                        instrument_id: str,
-                        db_session: Session,
-                        batch_size: int = 1000):
-    """
-    使用原生SQL批量插入（最高性能）
-    """
-    # 1. 定义 SQL 语句 (请根据您的数据库表结构调整字段名)
-    # 假设表名为 market_data
-    sql = text("""
-        INSERT INTO market_data (ExchangeID, InstrumentID, trade_date, open, close, high, low, volume, amount, suspend_flag)
-        VALUES (:ExchangeID, :InstrumentID, :trade_date, :open, :close, :high, :low, :volume, :amount, :suspend_flag)
-    """)
-
-    # 准备数据
-    records = []
-    for idx, row in df.iterrows():
-        # 获取日期（可能在索引或列中）
-        if isinstance(idx, pd.Timestamp):
-            trade_date = idx.date()
-        elif 'INDEX' in row:
-            trade_date = pd.to_datetime(row['INDEX']).date()
-        else:
-            trade_date = pd.to_datetime(row.name).date()
-
-        records.append({
-            'ExchangeID': exchange_id,
-            'InstrumentID': instrument_id,
-            'trade_date': trade_date,
-            'open': row.get('Open', None),
-            'close': row.get('Close', None),
-            'high': row.get('High', None),
-            'low': row.get('Low', None),
-            'volume': row.get('Volume', None),
-            'amount': row.get('Amount', None),
-            'suspend_flag': False
-        })
-
-    # 2. 执行批量插入
-    try:
-        # 使用 bulk_insert_mappings 性能更高，或者使用 session.execute
-        # 下面是通用的 SQLAlchemy 执行方式
-        for i in range(0, len(records), batch_size):
-            batch = records[i:i+batch_size]
-            db_session.execute(sql, batch)
-
-        db_session.commit() # 在循环外 commit，性能更优
-        print(f"成功插入 {len(records)} 条记录到数据库")
-        return len(records)
-
-    except Exception as e:
-        db_session.rollback()
-        print(f"批量插入失败: {e}")
-        raise
+    _save_kline_to_db_table(dfs, table_name, db_url, is_replace, CONSOLE)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1795,8 +1863,16 @@ def get_trading_dates(
 @click.option('--verbose', '-v', 'verbose', is_flag=True, help='详细模式')
 # 2026-05-22 新接口: formula_get_all, formula_get_info
 @click.option('--list-all', '-l', 'list_all', is_flag=True, help='列出所有可用的公式名称')
-# 2026-6-13 新参数：过滤 OUTPUT 开头的指标字段
-@click.option('--keep-output', '-ko', 'is_keep_output', is_flag=True, help='是否保留【技术指标】中的 OUTPUT 开头的字段')
+# 2026-6-30 新参数：字段过滤，用于筛选输出指标列名（替代原来的 --keep-output）
+@click.option('--field-exclusion', '-fe', 'field_exclusions', multiple=True, callback=split_comma,
+              help='需要从输出中剔除的指标列名（可多选）')
+@click.option('--field-regex-exclusion', '-fre', 'field_regex_exclusions', multiple=True, callback=split_comma,
+              default=[r'^OUTPUT\d+'], show_default=True,
+              help='需要从输出中剔除的指标列名的正则表达式（可多选），默认排除 OUTPUT 开头的字段')
+@click.option('--field-inclusion', '-fi', 'field_inclusions', multiple=True, callback=split_comma,
+              help='需要从输出中包含的指标列名（可多选）')
+@click.option('--field-regex-inclusion', '-fri', 'field_regex_inclusions', multiple=True, callback=split_comma,
+              help='需要从输出中包含的指标列名的正则表达式（可多选）')
 @click.option('--jump-tdx', '-j', 'jump_tdx', is_flag=True, help='跳转通达信界面（以获得L2指标数据）')
 @click.option('--with-name', '-wn', 'is_with_name', is_flag=True, help='股票代码是否带上股票名称')
 @click.pass_context
@@ -1813,12 +1889,22 @@ def formula(
     max_to_show: int,
     verbose: bool,
     list_all: bool,
-    is_keep_output: bool,
+    field_exclusions: list[str],
+    field_regex_exclusions: list[str],
+    field_inclusions: list[str],
+    field_regex_inclusions: list[str],
     jump_tdx: bool,
     is_with_name: bool,
     **kwargs,
 ):
-    """调用通达信公式进行计算（技术指标zb/条件选股xg/专家系统exp）公式"""
+    """调用通达信公式进行计算（技术指标zb/条件选股xg/专家系统exp）公式
+
+    可通过 -fe/-fre/-fi/-fri 参数过滤输出指标列名，默认排除 OUTPUT 开头的字段：
+    - -fe/--field-exclusion: 排除包含指定字符串的字段名
+    - -fre/--field-regex-exclusion: 正则排除字段名（默认 ^OUTPUT\\d+）
+    - -fi/--field-inclusion: 仅保留包含指定字符串的字段名
+    - -fri/--field-regex-inclusion: 正则保留字段名
+    """
     dividend_type_str = {0: 'none', 1: 'front', 2:'back'}.get(dividend_type, None)
     print_locals()
 
@@ -1835,6 +1921,11 @@ def formula(
     }.get(formula_type)
 
     _ft_int = {'zb': 0, 'xg': 1, 'exp': 2}.get(formula_type)
+
+    # ── 类型特征标志（一次性解析，后续不再判断 formula_type 字符串） ──
+    _is_zb = (formula_type == 'zb')
+    _is_xg = (formula_type == 'xg')
+    _is_exp = (formula_type == 'exp')
 
     try:
         if list_all or not name:
@@ -1868,7 +1959,7 @@ def formula(
 
             return
 
-        # 获取交易日用于组装数据
+        # ── 阶段2: 请求参数准备 ──
         trading_dates = tq.get_trading_dates(market='SH', start_time='', end_time='', count=count)
         CONSOLE.print(f"len(trading_dates) = {len(trading_dates)}")
         if verbose:
@@ -1878,120 +1969,136 @@ def formula(
         code_2_value = {}
         code_2_df = {}
 
-        # for _, full_code in enumerate_with_progress(stocks, console=CONSOLE):
+        # ── 阶段3: 逐股票调用 ──
+        formula_arg = ','.join(args)
+
         for _, full_code in enumerate(stocks):
             # NOTICE: 通达信缺陷：L2 数据需要软件先跳转（触发界面拉取后）才能获取，不然全是 0 值
             if jump_tdx:
-                jump_res = tq.exec_to_tdx(url=f"http://www.treeid/code_{full_code[:6]}") # 界面跳转
-                # CONSOLE.print(f"跳转返回： {jump_res}")
+                jump_res = tq.exec_to_tdx(url=f"http://www.treeid/code_{full_code[:6]}")
                 sleep(2)
 
-            formula_set_res = tq.formula_set_data_info(stock_code=full_code, stock_period=period, count=count, dividend_type=dividend_type)
-            # if verbose:
+            formula_set_res = tq.formula_set_data_info(stock_code=full_code, stock_period=period,
+                                                       count=count, dividend_type=dividend_type)
             if isinstance(formula_set_res, dict):
                 if int(formula_set_res.get('ErrorId', '-1')) != 0:
                     CONSOLE.print(f"[ERROR] formula_set_res(): {formula_set_res}")
-                    break # 失败了就没必要进行下一步了
+                    break
 
-            formula_arg = ','.join(args)
-            if formula_type == 'zb':
-                # -n MACD -a 12,26,9
+            # 调用公式 API（类型分发）
+            if _is_zb:
                 formula_res = tq.formula_zb(formula_name=name, formula_arg=formula_arg, xsflag=xs_flag)
-            elif formula_type == 'xg':
+            elif _is_xg:
                 formula_res = tq.formula_xg(formula_name=name, formula_arg=formula_arg)
-            elif formula_type == 'exp':
+            else:  # _is_exp
                 formula_res = tq.formula_exp(formula_name=name, formula_arg=formula_arg)
 
             if verbose:
-                CONSOLE.print(f"{full_code} {get_stock_name(full_code)} 在技术指标 {name} 值: {json.dumps(formula_res, indent=2, ensure_ascii=False)}")
+                CONSOLE.print(f"{full_code} {get_stock_name(full_code)} "
+                              f"在{_ft_name} {name} 值: {json.dumps(formula_res, indent=2, ensure_ascii=False)}")
 
-            if formula_type != 'zb':  # 【技术指标】才需要过滤 OUTPUT 开头的数据，其他指标默认都过滤
-                is_keep_output = True
-
+            # 提取 value_of_res（所有类型共用）
             value_of_res = {}
             if formula_res and isinstance(formula_res, dict) and int(formula_res.get('ErrorId', -1)) == 0:
                 value_of_res = formula_res.get('Value', {})
                 if value_of_res and isinstance(value_of_res, dict):
-                    if not is_keep_output:
-                        # 过滤 OUTPUT 开头的值
-                        value_of_res = {k:v for k,v in value_of_res.items() if not str(k).startswith("OUTPUT")}
-                    code_2_value.update({full_code: value_of_res})
+                    # 应用字段过滤（包含/排除，用于筛选输出指标列名）
+                    # 排除包含指定字符串的字段名
+                    for fe in (field_exclusions or []):
+                        value_of_res = {k: v for k, v in value_of_res.items() if fe not in k}
+                    # 正则排除字段名
+                    for fre in (field_regex_exclusions or []):
+                        try:
+                            value_of_res = {k: v for k, v in value_of_res.items() if not re.search(fre, k)}
+                        except re.error as re_err:
+                            E(正则出错=f"{re_err}", field_regex_exclusions=field_regex_exclusions, err_fre=fre)
+                            return
+                    # 包含指定字符串的字段名
+                    if field_inclusions:
+                        included = {}
+                        for fi in field_inclusions:
+                            included.update({k: v for k, v in value_of_res.items() if fi in k})
+                        value_of_res = included
+                    # 正则包含字段名
+                    if field_regex_inclusions:
+                        included = {}
+                        for fri in field_regex_inclusions:
+                            try:
+                                included.update({k: v for k, v in value_of_res.items() if re.search(fri, k)})
+                            except re.error as re_err:
+                                E(正则出错=f"{re_err}", field_regex_inclusions=field_regex_inclusions, err_fri=fri)
+                                return
+                        value_of_res = included
 
-            # 处理并统计结果
-            if formula_type in ('zb', 'xg'):
-                # 处理 技术指标 结果
+                    code_2_value[full_code] = value_of_res
 
-                if value_of_res and len(value_of_res) > 0:
-                    value_of_res_VALUES_LIST = list(value_of_res.values())
-                    cnt_of_res = len(value_of_res_VALUES_LIST[0])
+            # 构建每股票 DataFrame（所有类型统一处理）
+            if value_of_res:
+                value_of_res_VALUES_LIST = list(value_of_res.values())
+                cnt_of_res = len(value_of_res_VALUES_LIST[0])
 
-                    if verbose:
-                        CONSOLE.print(f"指标有{len(value_of_res)}个数，涵盖 {cnt_of_res} 天")
+                if verbose:
+                    CONSOLE.print(f"指标有{len(value_of_res)}个数：{value_of_res.keys()}，涵盖 {cnt_of_res} 天")
 
-                    if cnt_of_res < count:
-                        CONSOLE.print(f"⚠️ 返回指标天数 < 请求的数量({count})")
+                if cnt_of_res < count:
+                    CONSOLE.print(f"⚠️ 返回指标天数 < 请求的数量({count})")
 
-                    # 有效数据个数 = 交易日和指标返回结果的最小值
-                    valid_cnt = min(cnt_of_res, len(trading_dates))
-                    # 1. 构建 DataFrame
-                    # 这里 index 已经是 datetime 类型，列是指标数值
-                    # trading_dates 和 value_of_res 都一样，越临近的交易日数据越往后
-                    df = pd.DataFrame(value_of_res, index=pd.to_datetime(trading_dates[-cnt_of_res:]))
+                valid_cnt = min(cnt_of_res, len(trading_dates))
+                df = pd.DataFrame(value_of_res, index=pd.to_datetime(trading_dates[-cnt_of_res:]))
 
-                    # 假设 df 是你已经构建好的 DataFrame
-                    # 1. 定义什么叫“无效行”：全部为 None、空字符串或数值 0
-                    # 将所有可能的情况统一转化为 True (无效)
-                    is_invalid_row = (df.isna()) | (df == 0) | (df == '')
+                # 过滤掉"有效数据出现之前的无效行"
+                is_invalid_row = (df.isna()) | (df == 0) | (df == '')
+                valid_mask = is_invalid_row.all(axis=1).cumprod().astype(bool)
+                df_cleaned = df[~valid_mask]
 
-                    # 2. 找到这些无效行在 DataFrame 中的累计状态
-                    # cumall() 会判断：从第一行开始，直到遇到第一行 False（有效数据）之前，前面的行都标记为 True
-                    # 比如：[True, True, False, True, False] -> [True, True, False, False, False]
-                    valid_mask = is_invalid_row.all(axis=1).cumprod().astype(bool)
+                if verbose:
+                    if not df.empty:
+                        print_dataframe(df,
+                                        title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（未过滤空值）",
+                                        table_max_rows=max_to_show, printer=CONSOLE.print)
 
-                    # 3. 过滤掉那些在有效数据出现之前的“无效行”
-                    df_cleaned = df[~valid_mask]
-
-                    if verbose:
-                        if not df.empty:
-                            print_dataframe(df, title=f"{full_code} {get_stock_name(full_code)} 在技术指标 {name} 的输出（未过滤空值）",
-                                            table_max_rows=max_to_show, printer=CONSOLE.print)
-
-                    # 3. 后续打印或处理使用 df_cleaned
-                    if formula_type == 'zb' or verbose: # 指标公式（除非 verbose）不显示
-                        if not df_cleaned.empty:
-                            print_dataframe(df_cleaned, title=f"{full_code} {get_stock_name(full_code)} 在技术指标 {name} 的输出（已过滤空值）",
-                                            table_max_rows=max_to_show, printer=CONSOLE.print)
-
+                # zb 始终打印每股票详情；xg 仅在 verbose 时打印
+                if _is_zb or verbose:
                     if not df_cleaned.empty:
-                        code_2_df[full_code] = df_cleaned
-                    else:
-                        code_2_df[full_code] = df
-        # DEBUG:
+                        print_dataframe(df_cleaned,
+                                        title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（已过滤空值）",
+                                        table_max_rows=max_to_show, printer=CONSOLE.print)
+
+                code_2_df[full_code] = df_cleaned if not df_cleaned.empty else df
+
+        # ── 阶段4: 结果输出（类型分发） ──
         if verbose:
             CONSOLE.print(f"code_2_value = {code_2_value}")
 
+        if _is_zb:
+            return {'dfs': code_2_df}
+
+        # xg / exp 使用聚合输出
+        if _is_xg:
+            res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates,
+                                                    field_be_counted='OUTPUT1',
+                                                    is_with_name=is_with_name)
+            print_dataframe(res_df, title='选股结果', flatten_list=True,
+                            exclude_cols=['stocks'] if is_with_name else [],
+                            printer=CONSOLE.print)
+        elif _is_exp:
+            res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates,
+                                                    field_be_counted='ENTERLONG',
+                                                    is_with_name=is_with_name)
+            print_dataframe(res_df, title='专家系统 买入信号（ENTERLONG）统计结果',
+                            exclude_cols=['stocks'] if is_with_name else [],
+                            printer=CONSOLE.print)
+
+            res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates,
+                                                    field_be_counted='EXITLONG',
+                                                    is_with_name=is_with_name)
+            print_dataframe(res_df, title='专家系统 卖出信号（EXITLONG）统计结果',
+                            exclude_cols=['stocks'] if is_with_name else [],
+                            printer=CONSOLE.print)
+
+        if verbose:
             CONSOLE.print(f"res_df = ", end='')
             CONSOLE.print(Pretty(res_df))
-
-        if formula_type == 'zb':
-            return {'dfs': code_2_df}
-        if formula_type == 'xg':
-            # NOTICE: 选股公式，输出都是 OUTPUT1 中，被选中的 str(OUTPUT1) == "1"
-            res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates, field_be_counted='OUTPUT1', is_with_name=is_with_name)
-
-            print_dataframe(res_df, title='选股结果', flatten_list=True,
-                            exclude_cols=['stocks'] if is_with_name else [], printer=CONSOLE.print)
-            # return {'stocks': code_2_df.keys()}
-        elif formula_type == 'exp':
-            res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates, field_be_counted='ENTERLONG', is_with_name=is_with_name)
-            print_dataframe(res_df, title='专家系统 买入信号（ENTERLONG）统计结果',
-                            exclude_cols=['stocks'] if is_with_name else [], printer=CONSOLE.print)
-
-            res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates, field_be_counted='EXITLONG', is_with_name=is_with_name)
-            print_dataframe(res_df, title='专家系统 卖出信号（EXITLONG）统计结果',
-                            exclude_cols=['stocks'] if is_with_name else [], printer=CONSOLE.print)
-
-
 
         # stocks_on_date = _trans_xg_data_to_date2stocks(df)
         # for date, stocks in stocks_on_date.items():
@@ -2178,7 +2285,7 @@ def formula_multi(
                 CONSOLE.print(Pretty(mul_res, max_length=200))
 
                 # 把完整的结果保存到文件中
-                with open(f"RESULT-{'.'.join(stocks)}-zb_{name}({formula_arg}).json", 'w+', encoding='utf-8') as F:
+                with open(f"output/RESULT-{'.'.join(stocks)}-zb_{name}({formula_arg}).json", 'w+', encoding='utf-8') as F:
                     F.write(json.dumps(mul_res, ensure_ascii=False, indent=2))
                     F.flush()
 
@@ -2196,7 +2303,11 @@ def formula_multi(
             for fe in (field_exclusions or []):
                 df_long = df_long.loc[:, ~df_long.columns.str.contains(fe, na=False)]
             for fre in (field_regex_exclusions or []):
-                df_long = df_long.loc[:, ~df_long.columns.str.contains(fre, regex=True, na=False)]
+                try:
+                    df_long = df_long.loc[:, ~df_long.columns.str.contains(fre, regex=True, na=False)]
+                except re.error as re_err:
+                    E(正则出错=f"{re_err}", field_regex_exclusions=field_regex_exclusions, err_fre=fre)
+                    return
 
             # 处理 field_inclusions（包含）
             if field_inclusions:
@@ -2220,8 +2331,12 @@ def formula_multi(
             if field_regex_inclusions:
                 matched_cols = []
                 for fri in field_regex_inclusions:
-                    matched = df_long.columns[df_long.columns.str.contains(fri, regex=True, na=False)].tolist()
-                    matched_cols.extend(matched)
+                    try:
+                        matched = df_long.columns[df_long.columns.str.contains(fri, regex=True, na=False)].tolist()
+                        matched_cols.extend(matched)
+                    except re.error as re_err:
+                        E(正则出错=f"{re_err}", field_regex_inclusions=field_regex_inclusions, err_fri=fri)
+                        return
 
                 cols_to_keep = list(set(required_cols + matched_cols))
                 # 只保留实际存在的列
@@ -2303,27 +2418,66 @@ def _example(_ctx: click.Context,
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
-@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS, help='股票代码列表 (如: 688318.SH)')
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS,
+              help='股票代码列表（管道中由上游自动注入，也可手动传参）')
 @click.pass_context
-def test(_ctx: click.Context,
+def print_pipe(_ctx: click.Context,
     stocks: list[str],
 ):
-    """（测试）"""
-    CONSOLE = _ctx.obj['console'] # type: Console
-    try:
-        formula_name = 'UPN'
-        # 批量调用UPN 选股公式
-        mul_xg_res = tq.formula_process_mul_xg(
-            formula_name='UPN',
-            formula_arg='3',
-            return_count=30,
-            return_date=True,
-            stock_list=['688318.SH','600519.SH','000001.SZ'],
-            stock_period='1d',
-            count=5,
-            dividend_type=1)
-        CONSOLE.print(f"批量调用 {formula_name} 选股公式，结果: {mul_xg_res}")
-    except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+    """打印管道接收到的数据（用于测试管道功能）
+
+    用法示例：
+      gsl -c 存储 | print-pipe           # 查看上游传来的 stocks
+      gsl -c 存储 | get-market-data -p 1d -c 10 -fd | print-pipe  # 查看 stocks + df
+      formula -t zb -n MACD -c 10 | print-pipe  # 查看 stocks + dfs
+
+    简单类型（stocks 等）由管道引擎自动注入 --stock 参数；
+    复杂类型（df / dfs）通过 _pipe_data 传递，本命令从 ctx.obj 显式读取。
+    """
+    CONSOLE = _ctx.obj['console']  # type: Console
+
+    # ── 1. 简单类型：由 click.option 接收（管道引擎自动注入） ──
+    if stocks:
+        CONSOLE.print(f"\n[bold cyan]📦 stocks[/bold cyan] （[bold]{len(stocks)}[/bold] 只）:")
+        CONSOLE.print(Pretty(stocks, max_length=30) if len(stocks) > 30 else list(stocks))
+    else:
+        CONSOLE.print("[dim]📦 stocks: (空)[/dim]")
+
+    # ── 2. 复杂类型：从 _pipe_data 显式读取 ──
+    pipe_data = _ctx.obj.get('_pipe_data')
+    if not pipe_data:
+        CONSOLE.print("\n[yellow]⚠️ 未收到 _pipe_data（可能不在管道中，或上游未返回数据）[/yellow]")
+        CONSOLE.print("[dim]提示: 管道中上游命令需返回 dict 类型（如 {'stocks': ..., 'df': ..., 'dfs': ...}）[/dim]")
+        return
+
+    CONSOLE.print(f"\n[bold]🔗 _pipe_data 包含的 key:[/bold] {list(pipe_data.keys())}")
+
+    # ── 2a. df ──
+    _df = pipe_data.get('df')
+    if _df is not None:
+        if isinstance(_df, pd.DataFrame):
+            CONSOLE.print(f"\n[bold cyan]📊 df[/bold cyan]  shape={_df.shape}, columns={list(_df.columns)}, "
+                          f"index={_df.index.name or type(_df.index).__name__}")
+            # 如果 df 较小则直接打印，否则仅打印 head
+            if _df.shape[0] <= 20:
+                print_dataframe(_df, title='df 完整内容', printer=CONSOLE.print)
+            else:
+                print_dataframe(_df.head(10), title='df 前 10 行', printer=CONSOLE.print)
+                CONSOLE.print(f"[dim]... 省略 {_df.shape[0] - 10} 行[/dim]")
+        else:
+            CONSOLE.print(f"[dim]📊 df: type={type(_df).__name__} (非 DataFrame，跳过)[/dim]")
+
+    # ── 2b. dfs ──
+    _dfs = pipe_data.get('dfs')
+    if _dfs is not None:
+        if isinstance(_dfs, dict) and _dfs:
+            CONSOLE.print(f"\n[bold cyan]📚 dfs[/bold cyan] （[bold]{len(_dfs)}[/bold] 个股票）:")
+            for code, s_df in _dfs.items():
+                if isinstance(s_df, pd.DataFrame):
+                    CONSOLE.print(f"  [cyan]{code}[/cyan]  shape={s_df.shape}, columns={list(s_df.columns)}")
+                else:
+                    CONSOLE.print(f"  [cyan]{code}[/cyan]  type={type(s_df).__name__} (非 DataFrame)")
+        else:
+            CONSOLE.print("[dim]📚 dfs: (空)[/dim]")
 
 
