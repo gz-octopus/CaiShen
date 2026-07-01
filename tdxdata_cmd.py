@@ -54,6 +54,8 @@ from cache_cmd import (STOCKS,
 ALL_PERIODS = ['1m', '5m', '15m', '30m', '1h', '1d', '1w', '1mon', '1q', '1y',
     'tick'  # DEBUG
 ]
+ALL_DB_LIST = ['pg', 'postgresql', 'sqlite']
+DB_TYPE = 'pg'  # 全局默认数据库类型，可通过 db 命令的 --set-db-type 修改
 
 
 # ---------------------------------------------------------------------------------------------
@@ -533,7 +535,6 @@ def get_market_data(_ctx: click.Context,
 
     CONSOLE = _ctx.obj['console'] # type: Console
     CFG = _ctx.obj['cfg'] # type: dict
-    db_url = CFG.get('db_url')
 
     try:
         dict_df = tq.get_market_data(
@@ -568,7 +569,7 @@ def get_market_data(_ctx: click.Context,
                     print_dataframe(stock_df, title=f"股票数据 {code} （{period}）K线数据",
                                     show_footer=True, printer=CONSOLE.print)
                 if is_save_db:
-                    _save_to_db(stock_df, code, 'history_data_1d', CONSOLE, db_url)
+                    _save_to_db(stock_df, code, 'history_data_1d', CONSOLE, CFG, db_type=DB_TYPE)
 
             return {'dfs': stock_2_df}
 
@@ -581,7 +582,20 @@ def get_market_data(_ctx: click.Context,
 
 
 # ---------------------------------------------------------------------------------------------
-# 共享的 K 线数据入库辅助函数（供 get_market_data --save-db 和 save-to-db 命令共用）
+# 共享的 K 线数据入库辅助函数（供 get_market_data --save-db 和 db 命令共用）
+
+def _assemble_db_url(db_type: str, cfg: dict) -> str:
+    """根据 db_type 从 cfg 组装数据库连接 URL"""
+    if db_type == 'sqlite':
+        db_cfg = cfg.get('sqlite', {'drivername': 'sqlite', 'database': ':memory:'})
+    elif db_type in ('pg', 'postgresql'):
+        db_cfg = cfg.get('postgresql', {})
+    else:
+        raise ValueError(f"不支持的 db_type: {db_type}")
+    if not db_cfg:
+        raise ValueError(f"config.yaml 中缺少 {db_type} 数据库配置")
+    return generate_engine_url_str(**db_cfg)
+
 
 # 表名 → ORM 模型类 的映射（支持按需扩展）
 def _get_model_for_table(table_name: str):
@@ -614,14 +628,15 @@ def _df_row_to_record(date_idx, row: pd.Series, exchange_id: str, instrument_id:
     }
 
 
-def _save_kline_to_db_table(dfs: dict, table_name: str, db_url: str,
+def _save_kline_to_db_table(dfs: dict, table_name: str, db_type: str, cfg: dict,
                              is_replace: bool, console: Console) -> int:
     """通用 K 线数据入库（支持管道和内部调用）
 
     Args:
         dfs: {stock_code: DataFrame} 格式，DataFrame 索引为日期，列含 Open/Close/High/Low/Volume/Amount
         table_name: 目标数据库表名（如 history_data_1d）
-        db_url: 数据库连接 URL
+        db_type: 数据库类型（pg / postgresql / sqlite）
+        cfg: config.yaml 配置字典
         is_replace: 是否替换已存在的记录
         console: Rich Console 实例
 
@@ -633,6 +648,7 @@ def _save_kline_to_db_table(dfs: dict, table_name: str, db_url: str,
         console.print(f"[red]不支持的表名: {table_name}[/red]")
         return 0
 
+    db_url = _assemble_db_url(db_type, cfg)
     model_cls.init_db(db_url)
     total_inserted = 0
 
@@ -685,39 +701,56 @@ def _save_kline_to_db_table(dfs: dict, table_name: str, db_url: str,
 
 
 def _save_to_db(df: pd.DataFrame, code: str, table_name: str,
-                console: Console, db_url: str, is_replace: bool = False):
+                console: Console, cfg: dict, db_type: str = None, is_replace: bool = False):
     """保存单只股票的 K 线数据到数据库（供 get_market_data --save-db 内部调用）"""
-    _save_kline_to_db_table({code: df}, table_name, db_url, is_replace, console)
+    if db_type is None:
+        db_type = DB_TYPE
+    _save_kline_to_db_table({code: df}, table_name, db_type, cfg, is_replace, console)
 
 
 # ---------------------------------------------------------------------------------------------
 # 数据库保存命令（管道友好）
-@command_with_abbrev(abbrev='std', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@command_with_abbrev(abbrev='db', context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--table', '-t', 'table_name', required=True,
               help='目标数据库表名（如: history_data_1d）')
 @click.option('--replace', '-r', 'is_replace', is_flag=True,
               help='替换已存在的记录（默认跳过重复键）')
+@click.option('--db-type', '-db', 'db_type',
+              default=None,
+              type=click.Choice(ALL_DB_LIST, case_sensitive=False),
+              help=f'数据库类型（默认: {DB_TYPE}，可通过 --set-db-type 修改全局默认值）')
+@click.option('--set-db-type', '-sdb', 'set_db_type',
+              type=click.Choice(ALL_DB_LIST, case_sensitive=False),
+              help='修改全局默认的数据库类型（持久生效于当前 REPL 会话）')
 @click.pass_context
-def save_to_db(_ctx: click.Context, table_name: str, is_replace: bool):
-    """将管道传入的 K 线数据保存到数据库表（缩写: std）
+def db(_ctx: click.Context, table_name: str, is_replace: bool,
+       db_type: str, set_db_type: str):
+    """将管道传入的 K 线数据保存到数据库表（缩写: db）
 
     用法示例：
-        gmd -c 100 -s 600000.SH | save-to-db -t history_data_1d
-        gmd -c 100 -s 600000.SH | std -t history_data_1d -r
+        gmd -c 100 -s 600000.SH | db -t history_data_1d
+        gmd -c 100 -s 600000.SH | db -t history_data_1d -db sqlite -r
+        db --set-db-type sqlite           # 修改全局默认数据库类型
     """
+    global DB_TYPE
     CONSOLE = _ctx.obj['console']
     CFG = _ctx.obj['cfg']
-    db_url = CFG.get('db_url')
 
-    if not db_url:
-        CONSOLE.print("[red]config.yaml 中未配置 db_url[/red]")
-        return
+    # ── 处理 --set-db-type ──
+    if set_db_type:
+        DB_TYPE = set_db_type
+        CONSOLE.print(f"✅ 全局默认数据库类型已设为: [yellow]{DB_TYPE}[/yellow]")
 
-    # 从管道上游获取数据
+    # ── 解析 db_type ──
+    if db_type is None:
+        db_type = DB_TYPE
+
+    # 纯 --set-db-type 操作（无管道数据 + 无数据需保存），仅修改全局变量后返回
     pipe_data = _ctx.obj.get('_pipe_data', {})
     if not pipe_data:
-        CONSOLE.print("[red]无管道传入数据[/red]")
-        CONSOLE.print("用法示例: [yellow]gmd -c 100 -s 600000.SH | save-to-db -t history_data_1d[/yellow]")
+        if not set_db_type:
+            CONSOLE.print("[red]无管道传入数据[/red]")
+            CONSOLE.print("用法示例: [yellow]gmd -c 100 -s 600000.SH | db -t history_data_1d[/yellow]")
         return
 
     dfs = pipe_data.get('dfs', {})
@@ -726,7 +759,7 @@ def save_to_db(_ctx: click.Context, table_name: str, is_replace: bool):
         CONSOLE.print(f"上游返回的键: {list(pipe_data.keys())}")
         return
 
-    _save_kline_to_db_table(dfs, table_name, db_url, is_replace, CONSOLE)
+    _save_kline_to_db_table(dfs, table_name, db_type, CFG, is_replace, CONSOLE)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1663,7 +1696,7 @@ def user_sector(
                         CONSOLE.print(Pretty(_stocks, max_length=max_to_show) if max_to_show > 0 else _stocks)
 
                     if show_on_tdx:
-                        tq.send_user_block(block_code=_code, stocks=_stocks, show=True) # 把最后一个显示在客户端
+                        tq.send_user_block(block_code=_code, stock_list=_stocks, show=True) # 把最后一个显示在客户端
 
                     if is_save_memory or _is_pipe_producer:
                         stocks_in_filtered_sectors.update(set([_get(x) for x in _stocks if x]))
@@ -1696,7 +1729,7 @@ def user_sector(
 
             name = sectors_code2name.get(code, '临时条件股')
 
-            tq.send_user_block(block_code=code, stocks=stocks, show=show_on_tdx)
+            tq.send_user_block(block_code=code, stock_list=stocks, show=show_on_tdx)
 
             CONSOLE.print(f"已将 {len(stocks)} 只个股添加到自定义板块【代码：{code} 名称：{name}】中")
 
@@ -1733,7 +1766,7 @@ def user_sector(
                         keep_stocks.append(stock_code)
 
                 tq.clear_sector(block_code=code)  # 先清空原有板块中的个股
-                tq.send_user_block(block_code=code, stocks=keep_stocks, show=show_on_tdx)  # 再把过滤掉 ST 后的个股发送到客户端
+                tq.send_user_block(block_code=code, stock_list=keep_stocks, show=show_on_tdx)  # 再把过滤掉 ST 后的个股发送到客户端
 
                 CONSOLE.print(f"已从自定义板块【代码：{code} 名称：{name}】中删除 ST 的个股共 {len(_stocks) - len(keep_stocks)} 只: ", end='')
                 CONSOLE.print(Pretty(st_stocks, max_length=max_to_show) if max_to_show > 0 else st_stocks)
@@ -2253,7 +2286,7 @@ def formula_multi(
                             I(block_code=block_code, usr_block_name=usr_block_name)
                             create_res = tq.create_sector(block_code=block_code, block_name=usr_block_name)
                             I(create_res=create_res)
-                            tq.send_user_block(block_code=block_code, stocks=stocks, show=True)
+                            tq.send_user_block(block_code=block_code, stock_list=stocks, show=True)
 
                             CONSOLE.print(f"{date} 选出 {len(stocks)} 只股票，存于自定义板块 [yellow]{usr_block_name}[/yellow] 内。")
 
