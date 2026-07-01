@@ -25,6 +25,8 @@ from difoss_stock_util.click_util import *
 from difoss_stock_util.util import read_yaml_config, print_locals
 from difoss_stock_util.db_util import *
 from difoss_stock_util.metric_data.history_data_1d import *
+from difoss_stock_util.stock_util import is_st_stock
+from difoss_stock_util.color_log_util import *
 
 from cache_cmd import cache_stock_name, cache_st_stock_name
 from typing import Dict
@@ -50,7 +52,7 @@ def cache_stock_name_of_market(market='所有A股'):
             name = stock_info.get('Name') # type: str | None
             if code and name:
                 code2name.update({code: name})
-                if 'ST' in name.upper() or name.startswith('退') or name.endswith('退'):
+                if is_st_stock(name):
                     st_code2name.update({code: name})
 
     cache_st_stock_name(st_code2name) # 缓存ST

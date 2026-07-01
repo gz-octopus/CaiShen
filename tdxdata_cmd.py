@@ -33,7 +33,7 @@ from difoss_stock_util.click_util import *
 from difoss_stock_util.color_log_util import *
 from difoss_stock_util.security_util import *
 from difoss_stock_util.util import print_locals
-from difoss_stock_util.stock_util import calc_belong_trading_day, calc_count_of_trading_days, TradingInfo
+from difoss_stock_util.stock_util import calc_belong_trading_day, calc_count_of_trading_days, TradingInfo, is_st_stock
 from difoss_stock_util.db_util import *
 from datetime import time as datetime_time
 from difoss_stock_util.tdx_util.tdx_quant_data_dictionary import *
@@ -1495,7 +1495,7 @@ def get_stocks(_ctx: click.Context,
                             cache_stock_name({ x.get('Code'): x.get('Name') for x in res })
 
                         if without_st:
-                            res = [x for x in res if 'ST' not in x.get('Name').upper()]
+                            res = [x for x in res if not is_st_stock(x.get('Name', ''))]
 
                         if stock_name_contains:
                             res = [x for x in res if any(contain_str in x.get('Name', '') for contain_str in stock_name_contains)]
