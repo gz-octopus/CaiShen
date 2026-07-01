@@ -50,7 +50,7 @@ def cache_stock_name_of_market(market='所有A股'):
             name = stock_info.get('Name') # type: str | None
             if code and name:
                 code2name.update({code: name})
-                if 'ST' in name.upper() or name.startswith('退'):
+                if 'ST' in name.upper() or name.startswith('退') or name.endswith('退'):
                     st_code2name.update({code: name})
 
     cache_st_stock_name(st_code2name) # 缓存ST
