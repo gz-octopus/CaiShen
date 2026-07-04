@@ -1,5 +1,6 @@
 from xtquant import xtdata
 from difoss_stock_util import *
+from difoss_stock_util.xtquant_util import connect_miniQMT
 from difoss_stock_util.tdx_util import *
 from difoss_stock_util.color_log_util import *
 import pandas as pd

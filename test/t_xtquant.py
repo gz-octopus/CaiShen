@@ -3,6 +3,7 @@
 import click
 from datetime import datetime, date, timedelta, time as datetime_time
 from difoss_stock_util import *
+from difoss_stock_util.xtquant_util import get_market_stocks
 from difoss_stock_util.color_log_util import *
 from typing import Optional, List
 import pandas as pd
