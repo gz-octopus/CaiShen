@@ -45,7 +45,7 @@ from sqlalchemy.orm import Session
 from time import sleep
 
 from cache_cmd import (STOCKS,
-                       stocks_collector, df_collector,
+                       stocks_collector, blocks_collector, df_collector,
                        memory_cache, data_frame,
                        get_stock_name, cache_stock_name, is_st)
 
@@ -1266,14 +1266,18 @@ def get_gp_one_data(_ctx: click.Context,
 # 分类/板块成份股
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @stocks_collector
+@blocks_collector
 @click.option('-c', '--contains', 'contains', multiple=True, callback=split_comma, help='包含的字串')
 @click.option('-v', '--verbose', 'is_verbose', is_flag=True, help='是否打印详细信息')
 @click.pass_context
 def get_sector_list(_ctx: click.Context,
     contains: list[str],
     is_verbose: bool,
-    is_save_memory: bool,
-    group_index: int,
+    cache_stocks: bool,
+    stock_group_index: int,
+    cache_blocks: bool,
+    block_group_index: int,
+    **kwargs
 ):
     """获取A股板块代码列表（通达信板块、概念、行业等88开头的板块）"""
     CONSOLE = _ctx.obj['console']
@@ -1295,8 +1299,9 @@ def get_sector_list(_ctx: click.Context,
 
             print_dataframe(df_filtered, title=f'含有 {contains} 的板块（{len(df_filtered)} / {len(df)}）', printer=CONSOLE.print)
 
-            if is_save_memory or is_verbose or _is_pipe_producer:
+            if cache_stocks or is_verbose or _is_pipe_producer:
                 stocks_in_filtered_sectors = set()
+                blocks_in_filtered = set(df_filtered['Code'].tolist())
 
                 # 直接遍历过滤后的 DataFrame
                 for _, row in df_filtered.iterrows():
@@ -1307,13 +1312,16 @@ def get_sector_list(_ctx: click.Context,
                         CONSOLE.print(f"板块 [yellow]{sector_code}[/yellow] ({row['Name']}) 中含有 {len(res)} 只个股：", end='')
                         CONSOLE.print([f"{r.get('Code')}|{r.get('Name')}" for r in res if isinstance(r, dict)])
 
-                    if (is_save_memory or _is_pipe_producer) and res:
+                    if (cache_stocks or _is_pipe_producer) and res:
                         stocks_in_filtered_sectors.update([_get(x) for x in res if x])
 
-                if is_save_memory or _is_pipe_producer:
-                    return {'stocks': stocks_in_filtered_sectors}
+                if cache_stocks or cache_blocks or _is_pipe_producer:
+                    return {'stocks': stocks_in_filtered_sectors,
+                            'blocks': blocks_in_filtered}
 
         else:
+            if _is_pipe_producer:
+                return {'blocks': set(df['Code'].tolist())}
             print_dataframe(df, title='板块列表（全量）', print=CONSOLE.print)
 
     except Exception as e:
@@ -1335,8 +1343,8 @@ def get_stock_list_in_sector(
     futures_code: str,
     user_block_abbrev: str,
     list_type: int,
-    is_save_memory: bool,
-    group_index: int,
+    cache_stocks: bool,
+    stock_group_index: int,
     max_to_show: int,
     **kwargs,
 ):
@@ -1381,7 +1389,7 @@ def get_stock_list_in_sector(
         CONSOLE.print(f"板块 [yellow]{block_name}[/yellow] 中含有 {len(res)} 只个股：", end='')
         CONSOLE.print(Pretty(res, max_length=max_to_show) if (res and max_to_show > 0) else res)
 
-        if is_save_memory or _is_pipe_producer:
+        if cache_stocks or _is_pipe_producer:
             if res and isinstance(res, list):
                 stocks_result.update(set([_get(x) for x in res if x]))
 
@@ -1459,8 +1467,8 @@ def get_stocks(_ctx: click.Context,
     list_type: int,
     without_st: bool,
     max_to_show: int,
-    is_save_memory: bool,
-    group_index: int,
+    cache_stocks: bool,
+    stock_group_index: int,
 ):
     """获取系统分类成份股（通过指定 市场代码 或 市场名称）"""
     print_locals()
@@ -1506,10 +1514,10 @@ def get_stocks(_ctx: click.Context,
 
                         CONSOLE.print(Pretty(res, max_length=max_to_show) if max_to_show > 0 else res)
 
-                        if (is_save_memory or _is_pipe_producer) and isinstance(res, list):
+                        if (cache_stocks or _is_pipe_producer) and isinstance(res, list):
                             stocks_result.update([_get(x) for x in res if x])
 
-            if is_save_memory or _is_pipe_producer:
+            if cache_stocks or _is_pipe_producer:
                 I(stocks_result_LEN=len(stocks_result))
                 return {'stocks': stocks_result}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
 
@@ -1644,8 +1652,8 @@ def user_sector(
     name1: str,
     name2: str,
     is_with_name: bool,
-    is_save_memory: bool,
-    group_index: int,
+    cache_stocks: bool,
+    stock_group_index: int,
 ):
     """获取自定义板块中的股票列表（需要先使用 get_user_sector 获取板块列表）"""
     CONSOLE = _ctx.obj['console'] # type: Console
@@ -1698,17 +1706,17 @@ def user_sector(
                     if show_on_tdx:
                         tq.send_user_block(block_code=_code, stock_list=_stocks, show=True) # 把最后一个显示在客户端
 
-                    if is_save_memory or _is_pipe_producer:
+                    if cache_stocks or _is_pipe_producer:
                         stocks_in_filtered_sectors.update(set([_get(x) for x in _stocks if x]))
 
-                if is_save_memory or _is_pipe_producer:
+                if cache_stocks or _is_pipe_producer:
                         return {'stocks': stocks_in_filtered_sectors}
             else:
                 CONSOLE.print(f"自定义板块列表（共 {len(sectors)} 个）: ", end='')
                 CONSOLE.print(Pretty(sectors))
 
-            # 当 action == get 时，-sm 参数可存储板块中的个股到 cache_cmd.STOCKS 中，供后续命令使用
-            if is_save_memory or _is_pipe_producer:
+            # 当 action == get 时，-cs 参数可存储板块中的个股到 cache_cmd.STOCKS 中，供后续命令使用
+            if cache_stocks or _is_pipe_producer:
                 stocks_in_sectors = set()
                 for sector_info in sectors:
                     _code = sector_info.get('Code', '')
@@ -2220,8 +2228,8 @@ def formula_multi(
     output_style: str,
     sum_columns: list[str],
     is_save_user_sector: bool,
-    is_save_memory: bool,
-    group_index: int,
+    cache_stocks: bool,
+    stock_group_index: int,
     is_save_df: bool,
     **kwargs,
 ):
@@ -2268,7 +2276,7 @@ def formula_multi(
             print_dataframe(mul_res_df, title=f"批量调用选股公式结果", printer=CONSOLE.print)
 
             stocks_on_date = set()
-            if is_save_user_sector or is_save_memory:
+            if is_save_user_sector or cache_stocks:
                 for row in mul_res_df.itertuples():
                     date = getattr(row, 'Date', None)
                     if is_with_name:
@@ -2290,10 +2298,10 @@ def formula_multi(
 
                             CONSOLE.print(f"{date} 选出 {len(stocks)} 只股票，存于自定义板块 [yellow]{usr_block_name}[/yellow] 内。")
 
-                    if is_save_memory or _is_pipe_producer:
+                    if cache_stocks or _is_pipe_producer:
                         stocks_on_date.update(stocks)
 
-                if is_save_memory or _is_pipe_producer:
+                if cache_stocks or _is_pipe_producer:
                     return {'stocks': stocks_on_date}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
 
         elif formula_type == 'zb':

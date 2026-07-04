@@ -274,8 +274,8 @@ def market(_ctx: click.Context,
     markets: list[str],
     different: bool,
     max_to_show: int,
-    is_save_memory: bool,
-    group_index: int,
+    is_cache_stocks: bool,
+    stock_group_index: int,
 ):
     """市场相关功能"""
     if ('ALL' in markets) or (not markets):
@@ -322,7 +322,7 @@ def market(_ctx: click.Context,
             CONSOLE.print(f"市场 {market} 股票共 {len(full_codes)} 只：", end='')
             CONSOLE.print(Pretty(codes_with_name, max_length=max_to_show) if max_to_show > 0 else codes)
 
-        if is_save_memory:
+        if is_cache_stocks:
             return {'stocks': codes_in_markets}
 
     except Exception as e:
@@ -548,8 +548,8 @@ def get_sector_list(_ctx: click.Context,
     max_to_show: int,
     wanna_main_contract: int,
     category: bool,
-    is_save_memory: bool,
-    group_index: int,
+    is_cache_stocks: bool,
+    stock_group_index: int,
 ):
     """获取A股板块代码列表"""
     global CONSOLE
@@ -660,7 +660,7 @@ def get_sector_list(_ctx: click.Context,
 
             CONSOLE.print(f"板块代码列表（过滤含有 {contains} ）: {sectors_filtered}\n{len(sectors_filtered)} / {len(sectors)} 个板块")
 
-        if is_save_memory:
+        if is_cache_stocks:
             stocks_to_saved = set()
             for sector in sectors_filtered or sectors: # 如果有过滤条件则用过滤后的板块列表，否则用全部板块列表
                 stocks_in_sector = xtdata.get_stock_list_in_sector(sector_name=sector)
