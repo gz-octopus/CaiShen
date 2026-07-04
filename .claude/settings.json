@@ -1,3 +1,16 @@
 {
-  "language": "chinese"
+  "language": "chinese",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"$(date '+%Y-%m-%dT%H:%M:%S')\t{{tool_input}}\" >> \"${CLAUDE_PROJECT_DIR}/.claude/bash_history.log\""
+          }
+        ]
+      }
+    ]
+  }
 }
