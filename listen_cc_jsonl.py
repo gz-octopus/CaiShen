@@ -218,6 +218,11 @@ def _traverse_path(value, parts: List[str]):
             return '\n'.join(collected)
         return collected
 
+    # 纯字符串作为 content 时的兼容：message.content 可能是 "..." 而非 [{type:"text",text:"..."}]
+    # 此时 message.content.text 应等价于 message.content 本身
+    if isinstance(value, str) and part == 'text' and not rest:
+        return value
+
     return None
 
 
@@ -318,10 +323,10 @@ def _fmt_entry(entry: dict, fields: List[str], must_fields: Optional[List[str]] 
         formatted = format_value(value, indent=0)
 
         if '\n' in formatted:
-            # 多行内容：标签单独一行，内容整体缩进 4 空格
+            # 多行内容：标签单独一行，内容不额外缩进
             lines.append(f"  [{color}]{label}[/{color}]:")
             for fline in formatted.split('\n'):
-                lines.append(f"    {fline}")
+                lines.append(fline)
         else:
             lines.append(f"  [{color}]{label}[/{color}]: [yellow]{formatted}[/yellow]")
     return '\n'.join(lines)
@@ -340,8 +345,30 @@ def _flush_group(entries: list[dict], fields: List[str], msg_id: str = '',
         _CONSOLE.print(_fmt_entry(entry, fields, must_fields))
         _CONSOLE.print()  # 同组内各条目之间空行
 
+def _scan_matching_prompt_ids(filepath: Path, search_text: str) -> set:
+    """
+    第一遍扫描：逐行读取原始 jsonl 文本，若行中包含 search_text 且可提取
+    到 promptId，则收集该 promptId。不做结构化解析，直接对原始字符串匹配。
+    """
+    matching: set[str] = set()
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for raw_line in f:
+            stripped = raw_line.strip()
+            if not stripped or search_text not in stripped:
+                continue
+            try:
+                data = json.loads(stripped)
+                pid = data.get('promptId', '')
+                if pid:
+                    matching.add(pid)
+            except Exception:
+                pass
+    return matching
+
+
 def tail_file(filepath: Path, fields: List[str], must_fields: Optional[List[str]] = None,
-              follow: bool = True, show_all: bool = False, tail_mode: bool = False):
+              follow: bool = True, show_all: bool = False, tail_mode: bool = False,
+              find_user_message: Optional[str] = None):
     """
     读取（并可选择持续监听）JSONL 文件，按 messageId 分组输出提取字段。
     tail_mode=True 时从文件末尾开始，仅输出新写入的行。
@@ -355,6 +382,15 @@ def tail_file(filepath: Path, fields: List[str], must_fields: Optional[List[str]
     logger.info(f"提取字段: {', '.join(fields)}")
     if must_fields:
         logger.info(f"必须字段 (值非 dict 即满足): {', '.join(must_fields)}")
+
+    # 初始扫描：收集匹配的 promptId
+    prompt_filter: Optional[set] = None
+    if find_user_message:
+        prompt_filter = _scan_matching_prompt_ids(filepath, find_user_message)
+        logger.info(f"find-user-message: '{find_user_message}' → {len(prompt_filter)} 个 promptId: {prompt_filter}")
+        if not prompt_filter:
+            _CONSOLE.print(f"[yellow]未找到包含 '{find_user_message}' 的用户消息[/yellow]")
+            return
 
     pending: list[tuple[str, list[dict]]] = []  # [(mid, [entry, ...]), ...]
 
@@ -390,6 +426,7 @@ def tail_file(filepath: Path, fields: List[str], must_fields: Optional[List[str]
 
     def _read_batch(f) -> tuple[list[tuple[str, list[dict]]], bool]:
         """从当前文件指针读取所有可读行，按 messageId 分组"""
+        nonlocal prompt_filter
         groups: list[tuple[str, list[dict]]] = []
         truncated = False
         while True:
@@ -397,14 +434,36 @@ def tail_file(filepath: Path, fields: List[str], must_fields: Optional[List[str]
             line = f.readline()
             if not line:
                 break
+
+            # 单次解析 JSON，兼顾 messageId / promptId
+            try:
+                raw = json.loads(line.strip())
+            except Exception:
+                continue
+
+            # promptId 动态发现（follow 模式下新写入的匹配行会被捕获）
+            if find_user_message and prompt_filter is not None:
+                stripped = line.strip()
+                if find_user_message in stripped:
+                    try:
+                        pid = json.loads(stripped).get('promptId', '')
+                        if pid and pid not in prompt_filter:
+                            prompt_filter.add(pid)
+                            logger.info(f"动态发现新匹配 promptId: {pid}")
+                    except Exception:
+                        pass
+
+            # promptId 过滤：仅对带 promptId 的行生效；无 promptId 的行（系统事件等）放行
+            if prompt_filter is not None:
+                pid = raw.get('promptId', '')
+                if pid and pid not in prompt_filter:
+                    continue
+
             data = process_line(line, fields, must_fields, show_all)
             if data is None:
                 continue
-            try:
-                mid = json.loads(line.strip()).get('messageId', '')
-            except Exception:
-                mid = ''
 
+            mid = raw.get('messageId', '')
             if groups and groups[-1][0] == mid:
                 groups[-1][1].append(data)
             else:
@@ -460,7 +519,7 @@ def tail_file(filepath: Path, fields: List[str], must_fields: Optional[List[str]
     '--field', '-F', 'fields',
     multiple=True,
     callback=split_comma,
-    default=['timestamp', 'type', 'message.role',],
+    default=['timestamp', 'type', 'message.role', 'message.content.name'],
     help='要提取的字段，用逗号分隔，支持嵌套字段如 message.content (默认: timestamp,type,message,content)'
 )
 @click.option(
@@ -495,8 +554,15 @@ def tail_file(filepath: Path, fields: List[str], must_fields: Optional[List[str]
     default=['message.content.text',],
     help='必须字段过滤：若某 must-field 值为 dict 则不满足，继续判断下一个；全部都不满足则跳过该行。支持嵌套字段，可多次指定或逗号分隔'
 )
+@click.option(
+    '--find-user-message', '-fum',
+    type=str,
+    default=None,
+    help='查找 user 消息中包含指定字符串的 promptId，仅显示该轮对话的所有消息'
+)
 def main(file: Path, fields: list[str], no_follow: bool, show_all: bool,
-         list_types: bool, list_files: bool, tail: bool, must_fields: list[str]):
+         list_types: bool, list_files: bool, tail: bool, must_fields: list[str],
+         find_user_message: Optional[str]):
     """
     持续监听 JSONL 文件并按 messageId 分组提取指定字段。
 
@@ -529,6 +595,10 @@ def main(file: Path, fields: list[str], no_follow: bool, show_all: bool,
     \b
     # 只显示 message.content.text 值不是 dict 的行（如过滤掉纯 thinking/tool_use 行）
     python listen_cc_jsonl.py -mf message.content.text
+
+    \b
+    # 查找包含特定关键词的 user 消息，仅显示该轮对话
+    python listen_cc_jsonl.py -fum "回测"
     """
 
     # --list-files：列出默认目录下所有 jsonl 文件（不依赖具体文件）
@@ -580,7 +650,8 @@ def main(file: Path, fields: list[str], no_follow: bool, show_all: bool,
 
     # 开始监听
     tail_file(file, fields, must_fields=must_fields,
-              follow=not no_follow, show_all=show_all, tail_mode=tail)
+              follow=not no_follow, show_all=show_all, tail_mode=tail,
+              find_user_message=find_user_message)
 
 
 if __name__ == '__main__':
