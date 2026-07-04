@@ -43,6 +43,8 @@ ACTIONS = (
 # Globals
 STOCKS = set()
 GROUPED_STOCKS = defaultdict(set) # type: Dict[int, set]
+BLOCKS = set()
+GROUPED_BLOCKS = defaultdict(set) # type: Dict[int, set]
 STOCKS_DF = pd.DataFrame()
 STOCK_2_DF = dict() # type: Dict[str, pd.DataFrame]
 _STOCK_2_NAME = {}
@@ -125,6 +127,23 @@ class CacheManager:
                 how='outer',
             )
         # click.echo(f"【update_dataframe_by_stock】code={code}, len(df)={STOCK_2_DF[code].shape}")
+
+    def update_blocks(self, codes: Iterable):
+        global BLOCKS
+        old_len = len(BLOCKS)
+        BLOCKS.update(codes)
+        I(f"新增 {len(BLOCKS) - old_len} 个板块", _level='CACHE')
+
+    def update_group_blocks(self, group_index, codes: Iterable):
+        """将板块数据存入指定分组"""
+        global GROUPED_BLOCKS
+
+        if group_index not in GROUPED_BLOCKS:
+            GROUPED_BLOCKS[group_index] = set()
+
+        old_len = len(GROUPED_BLOCKS[group_index])
+        GROUPED_BLOCKS[group_index].update(codes)
+        I(f"新增 {len(GROUPED_BLOCKS[group_index]) - old_len} 个板块到分组 {group_index}", _level='CACHE')
 
     def update_dataframe(self, df: pd.DataFrame, prefix: str=None):
         global STOCKS_DF
@@ -415,7 +434,7 @@ def data_frame(_ctx: click.Context,
 ):
     """显示 DataFrame 缓存状态 (STOCKS_DF 和 STOCK_2_DF)"""
     CONSOLE = _ctx.obj['console'] # type: console.Console
-    
+
     print_locals(printer=CONSOLE.print)
     global STOCKS_DF, STOCK_2_DF
 
@@ -464,9 +483,9 @@ def data_frame(_ctx: click.Context,
 
 
     with _lock:
-        
+
         keys = list(STOCK_2_DF.keys())
-        
+
         # 0. 检查是否清空
         if is_clean:
             total_cnt = len(keys)
@@ -509,7 +528,7 @@ def data_frame(_ctx: click.Context,
             if keys:
                 CONSOLE.print(f"当前共有 [bold]{len(keys)}[/bold] 只股票缓存：")
                 CONSOLE.print(Pretty(keys, max_length=max_to_show if max_to_show else len(keys)))
-                
+
                 for code, df in STOCK_2_DF.items():
                     CONSOLE.print(f"（第一个数据作为展示）")
                     if isinstance(df, pd.DataFrame) and not df.empty:
@@ -551,24 +570,36 @@ def _stocks_collector_v0(func):
     return wrapper
 
 
+def _generate_long_short_param(param_name :str) -> tuple[str, str]:
+    """
+    根据 param_name 和 group_index_param 生成 click.option 的参数列表
+    """
+    # 1. 构造 -- 开头的长参数
+    long_param = f"--{param_name.replace('_', '-')}"
+    # 2. - 开头的短参数（取短语的首字母）
+    first_letters = [word[0] for word in param_name.split('_') if word]
+    short_param = f"-{''.join(first_letters)}" if first_letters else None
+
+    return long_param, short_param
+
 def stocks_collector(
     func=None, *,
-    save_memory_param='is_save_memory',
-    group_index_param='group_index',
+    save_memory_param='cache_stocks',
+    group_index_param='stock_group_index',
     help='把查询到的结果存于内存以做后续处理（REPL有效）'
 ):
     """
     智能装饰器：自动处理 --save-memory 参数
     注意：
- * 被装饰函数请手动添加上 is_save_memory: bool 参数
+ * 被装饰函数请手动添加上 cache_stocks: bool 参数
  * 被装饰函数返回一个 dict: {'stocks': [<stock>...] }
 
     参数:
-        save_memory_param: 参数名，默认为 'is_save_memory'
+        save_memory_param: 参数名，默认为 'cache_stocks'
 
     使用方式1：无参数
         @stocks_collector
-        def your_func(is_save_memory: bool,
+        def your_func(cache_stocks: bool,
             group_index_param: int):
             ... ...
             return {'stocks': [<stock>...] } # 直接返回带有 codes 的列表
@@ -608,10 +639,75 @@ def stocks_collector(
             return result
 
         # 动态添加两个参数
-        f = click.option('--save-memory', '-sm', save_memory_param, is_flag=True,
+        long_param, short_param = _generate_long_short_param(save_memory_param)
+        f = click.option(long_param, short_param, save_memory_param, is_flag=True,
                          help='把查询到的结果存于内存')(f)
-        f = click.option('--group-index', '-gi', group_index_param, type=int,
+        long_param, short_param = _generate_long_short_param(group_index_param)
+        f = click.option(long_param, short_param, group_index_param, type=int,
                          help='指定存入的分组索引（不填则存入默认缓存）')(f)
+
+        return functools.update_wrapper(wrapper, f)
+
+    return decorator(func) if func else decorator
+
+
+def blocks_collector(
+    func=None, *,
+    save_memory_param='cache_blocks',
+    group_index_param='block_group_index',
+    help='把查询到的板块结果存于内存以做后续处理（REPL有效）'
+):
+    """
+    智能装饰器：自动处理 --save-memory 参数，缓存板块代码（block_code）
+    注意：
+ * 被装饰函数请手动添加上 cache_stocks: bool 参数
+ * 被装饰函数返回一个 dict: {'blocks': [<block_code>...] }
+
+    参数:
+        save_memory_param: 参数名，默认为 'cache_stocks'
+
+    使用方式1：无参数
+        @blocks_collector
+        def your_func(cache_stocks: bool,
+            group_index: int):
+            ... ...
+            return {'blocks': [<block_code>...] }
+
+    使用方式2：有参数
+        @blocks_collector(save_memory_param='save_result')
+        def your_func(save_result: bool,
+            group_index: int):
+            ... ...
+            return {'blocks': [<block_code>...] }
+    """
+    def decorator(f):
+        @functools.wraps(f)
+        def wrapper(*args, **kwargs):
+            global BLOCKS, CACHE
+
+            should_save = kwargs.get(save_memory_param, False)
+            target_group = kwargs.get(group_index_param, False)
+
+            result = f(*args, **kwargs)
+
+            if should_save and result:
+                res_blocks = result.get('blocks') if isinstance(result, dict) else None
+
+                with _lock:
+                    if target_group is not None:
+                        CACHE.update_group_blocks(target_group, res_blocks)
+                    else:
+                        CACHE.update_blocks(res_blocks)
+
+            return result
+
+        # 动态添加两个参数
+        long_param, short_param = _generate_long_short_param(save_memory_param)
+        f = click.option(long_param, short_param, save_memory_param, is_flag=True,
+                         help='把查询到的板块结果存于内存')(f)
+        long_param, short_param = _generate_long_short_param(group_index_param)
+        f = click.option(long_param, short_param, group_index_param, type=int,
+                         help='指定存入的分组索引（不填则存入默认板块缓存）')(f)
 
         return functools.update_wrapper(wrapper, f)
 
