@@ -18,10 +18,7 @@ from rich.table import Table
 # global variables
 _CONSOLE = Console()
 
-# TODO: difoss_stock_util.click_util 会导致程序启动变慢，需要优化
-# from difoss_stock_util.click_util import split_comma
-
-
+# NOTICE: 直接 from difoss_stock_util.click_util import split_comma 会比较慢，所以在这里显式定义一个快速版本
 def split_comma(ctx: click.Context, param: click.Parameter, value) -> list[str]:
     """将逗号分隔的字符串拆分为列表，同时支持多个值"""
     if not value:
@@ -323,10 +320,10 @@ def _fmt_entry(entry: dict, fields: List[str], must_fields: Optional[List[str]] 
         formatted = format_value(value, indent=0)
 
         if '\n' in formatted:
-            # 多行内容：标签单独一行，内容不额外缩进
+            # 多行内容：标签单独一行，内容整体缩进 4 空格
             lines.append(f"  [{color}]{label}[/{color}]:")
             for fline in formatted.split('\n'):
-                lines.append(fline)
+                lines.append(f"    {fline}")
         else:
             lines.append(f"  [{color}]{label}[/{color}]: [yellow]{formatted}[/yellow]")
     return '\n'.join(lines)
