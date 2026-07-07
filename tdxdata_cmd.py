@@ -34,7 +34,9 @@ from difoss_stock_util.color_log_util import *
 from difoss_stock_util.security_util import *
 from difoss_stock_util.util import print_locals
 from difoss_stock_util.stock_util import calc_belong_trading_day, calc_count_of_trading_days, TradingInfo, is_st_stock
-from difoss_stock_util.db_util import *
+from difoss_stock_util.db_util_lazy_loading import *
+from difoss_stock_util.metric_data.stock_metrics import StockMetrics
+from difoss_stock_util.metric_data.market_data import MarketData
 from datetime import time as datetime_time
 from difoss_stock_util.tdx_util.tdx_quant_data_dictionary import *
 from difoss_stock_util.time_util import TimeUtils
@@ -600,7 +602,9 @@ def get_market_data(_ctx: click.Context,
                 if is_save_db:
                     _save_to_db(stock_df, code, 'history_data_1d', CONSOLE, CFG, db_type=DB_TYPE)
 
-            return {'dfs': stock_2_df}
+            _dt_map = {'none': 0, 'front': 1, 'back': 2}
+            return {'dfs': stock_2_df, '_source': 'market_data',
+                    'period': period, 'dividend_type': _dt_map.get(dividend_type, 1)}
 
         else:
             CONSOLE.print("[red]❎ 返回空数据[/red]")
@@ -740,8 +744,9 @@ def _save_to_db(df: pd.DataFrame, code: str, table_name: str,
 # ---------------------------------------------------------------------------------------------
 # 数据库保存命令（管道友好）
 @command_with_abbrev(abbrev='db', context_settings={'help_option_names': ['-?', '--help', '-h']})
-@click.option('--table', '-t', 'table_name', required=True,
-              help='目标数据库表名（如: history_data_1d）')
+@click.option('--table', '-t', 'table_name', default=None,
+              help='目标数据库表名（如: history_data_1d / stock_metrics）。'
+                   '不指定时自动推断：formula 来源 → stock_metrics，其他 → history_data_1d')
 @click.option('--replace', '-r', 'is_replace', is_flag=True,
               help='替换已存在的记录（默认跳过重复键）')
 @click.option('--db-type', '-db', 'db_type',
@@ -754,12 +759,17 @@ def _save_to_db(df: pd.DataFrame, code: str, table_name: str,
 @click.pass_context
 def db(_ctx: click.Context, table_name: str, is_replace: bool,
        db_type: str, set_db_type: str):
-    """将管道传入的 K 线数据保存到数据库表（缩写: db）
+    """将管道传入的数据保存到数据库表（缩写: db）
+
+    -t 不指定时自动推断：
+      formula / formula_multi 来源 → stock_metrics
+      get_market_data 等其他来源 → history_data_1d
 
     用法示例：
-        gmd -c 100 -s 600000.SH | db -t history_data_1d
-        gmd -c 100 -s 600000.SH | db -t history_data_1d -db sqlite -r
-        db --set-db-type sqlite           # 修改全局默认数据库类型
+        gmd -c 100 -s 600000.SH | db                    # → history_data_1d
+        f -t zb -n MACD -s 603337.SH | db               # → stock_metrics
+        gmd -c 100 -s 600000.SH | db -t stock_metrics   # 显式覆盖
+        db --set-db-type sqlite                          # 修改全局默认数据库类型
     """
     global DB_TYPE
     CONSOLE = _ctx.obj['console']
@@ -788,6 +798,45 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
         CONSOLE.print(f"上游返回的键: {list(pipe_data.keys())}")
         return
 
+    # ── 自动推断目标表名 ──
+    if table_name is None:
+        _source = pipe_data.get('_source', '')
+        if _source == 'stock_metrics':
+            table_name = 'stock_metrics'
+        elif _source == 'market_data':
+            table_name = 'market_data'
+        elif pipe_data.get('formula_key'):
+            table_name = 'stock_metrics'  # 向后兼容：旧管道无 _source 但有 formula_key
+        else:
+            table_name = 'history_data_1d'
+        CONSOLE.print(f"[dim]根据管道来源自动选择表: [yellow]{table_name}[/yellow][/dim]")
+
+    # ── stock_metrics：公式指标 JSONB ──
+    if table_name == 'stock_metrics':
+        period = pipe_data.get('period', '1d')
+        dividend_type = pipe_data.get('dividend_type', 1)
+        formula_key = pipe_data.get('formula_key', '')
+        if not formula_key:
+            CONSOLE.print("[red]管道数据中缺少 formula_key，无法确定指标公式标识[/red]")
+            CONSOLE.print("提示: 请使用 [yellow]formula -t zb -n <公式名> ... | db -t stock_metrics[/yellow]")
+            return
+        db_url = _assemble_db_url(db_type, CFG)
+        StockMetrics.init_db(db_url)
+        StockMetrics.bulk_upsert_from_dfs(dfs, formula_key, period, dividend_type,
+                                          db_url, is_replace, console=CONSOLE)
+        return
+
+    # ── market_data：行情 K 线 JSONB ──
+    if table_name == 'market_data':
+        period = pipe_data.get('period', '1d')
+        dividend_type = pipe_data.get('dividend_type', 1)
+        db_url = _assemble_db_url(db_type, CFG)
+        MarketData.init_db(db_url)
+        MarketData.bulk_upsert_from_dfs(dfs, period, dividend_type,
+                                         db_url, is_replace, console=CONSOLE)
+        return
+
+    # ── 其他表：走 ORM（如 history_data_1d）──
     _save_kline_to_db_table(dfs, table_name, db_type, CFG, is_replace, CONSOLE)
 
 
@@ -1975,7 +2024,6 @@ def formula(
     - -fi/--field-inclusion: 仅保留包含指定字符串的字段名
     - -fri/--field-regex-inclusion: 正则保留字段名
     """
-    dividend_type_str = {0: 'none', 1: 'front', 2:'back'}.get(dividend_type, None)
     print_locals()
 
     CONSOLE = _ctx.obj['console'] # type: Console
@@ -2141,7 +2189,10 @@ def formula(
             CONSOLE.print(f"code_2_value = {code_2_value}")
 
         if _is_zb:
-            return {'dfs': code_2_df}
+            formula_key = f"{name}|{','.join(args)}" if args else name
+            return {'dfs': code_2_df, 'period': period,
+                    'formula_key': formula_key, 'dividend_type': dividend_type,
+                    '_source': 'stock_metrics'}
 
         # xg / exp 使用聚合输出
         if _is_xg:
@@ -2428,9 +2479,11 @@ def formula_multi(
                 for stock_code, stock_df in stock_dfs.items():
                     print_dataframe(stock_df, title=f"{stock_code}|{get_stock_name(stock_code,'')} 在 [yellow]{name}[/yellow] 指标的值", sum_cols=sum_columns, printer=CONSOLE.print)
 
-                # TODO:
                 if is_save_df:
-                    return {'dfs': stock_dfs}
+                    formula_key = f"{name}|{','.join(args)}" if args else name
+                    return {'dfs': stock_dfs, 'period': period,
+                            'formula_key': formula_key, 'dividend_type': dividend_type,
+                            '_source': 'stock_metrics'}
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
 
