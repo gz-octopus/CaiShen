@@ -1,4 +1,4 @@
-#!python3
+#!python
 # encoding: utf-8
 # author: DifossChen
 
@@ -65,7 +65,7 @@ def init(_ctx: click.Context):
     try:
         # xtdata.enable_hello = False
         # tq.initialize(__file__)
-        click.echo("✅ 初始化成功")
+        CONSOLE.print("✅ 初始化成功")
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
 

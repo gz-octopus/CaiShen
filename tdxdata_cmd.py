@@ -222,6 +222,35 @@ def _zb_multi_result_to_dataframe(mul_res: dict, index=['stock_code', 'date'], c
     # 创建DataFrame
     df = pd.DataFrame(rows)
 
+    # 过滤掉"有效数据出现之前的无效行"（与 formula 函数行为一致）
+    # 逻辑：对于每只股票，从开头逐行检查，如果某行所有指标值均为 NaN/0/空字符串，
+    # 则视为"无效前导行"并删除，直到遇到第一个至少有一列有效值的行。
+    if not df.empty:
+        indicator_cols = [c for c in df.columns if c not in ('stock_code', 'date')]
+        if indicator_cols:
+            def _filter_invalid_leading_rows(group_df: pd.DataFrame) -> pd.DataFrame:
+                """过滤单只股票的有效数据出现之前的无效行"""
+                if group_df.empty:
+                    return group_df
+                # 标记所有指标值均为 NaN、0（数值或字符串）、空字符串的行
+                is_invalid_row = (
+                    group_df[indicator_cols].isna()
+                    | (group_df[indicator_cols] == 0)
+                    | (group_df[indicator_cols] == '0')
+                    | (group_df[indicator_cols] == '')
+                )
+                # cumprod: 一旦遇到第一个非全无效行（值为 False/0），后续全部为 False
+                valid_mask = is_invalid_row.all(axis=1).cumprod().astype(bool)
+                return group_df[~valid_mask]
+
+            # 逐股票分组过滤（避免 groupby.apply 的 include_groups 兼容问题）
+            filtered_dfs = []
+            for _, group_df in df.groupby('stock_code', sort=False):
+                filtered = _filter_invalid_leading_rows(group_df)
+                if not filtered.empty:
+                    filtered_dfs.append(filtered)
+            df = pd.concat(filtered_dfs, ignore_index=True) if filtered_dfs else df.iloc[0:0]
+
     # 将日期列转换为datetime类型（可选）
     if convert_datetime:
         df['date'] = pd.to_datetime(df['date'], format='%Y%m%d')

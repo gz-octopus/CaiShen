@@ -13,6 +13,7 @@ from datetime import datetime
 import pandas as pd
 
 from difoss_stock_util import *
+from difoss_stock_util.db_util import generate_engine_url_str
 from difoss_stock_util.xtquant_util import get_market_stocks, transform_data
 from difoss_stock_util.color_log_util import *
 

@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta, time as datetime_time
 from typing import List, Optional
 from pathlib import Path
-from difoss_stock_util.metric_data import *
+
 
 def fetch_tdx_json(stock_code):
     """
@@ -55,10 +55,11 @@ def calculate_total_fs(data):
     return 100 - total_minus_fs
 
 
+from difoss_stock_util.metric_data.slb import SLBDetail
 from difoss_stock_util import *
 from difoss_stock_util.xtquant_util import get_market_stocks
 from difoss_stock_util.slb_file_mgr import SLBFileManager
-from difoss_stock_util.db_util import get_local_stocks
+from difoss_stock_util.db_util import get_local_stocks, generate_engine_url_str
 from difoss_stock_util.color_log_util import *
 import click
 from rich import print

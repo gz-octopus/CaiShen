@@ -4,6 +4,7 @@
 #
 from difoss_stock_util import *
 from difoss_stock_util.color_log_util import *
+from difoss_stock_util.db_util_lazy_loading import *
 from difoss_stock_util.metric_data import *
 
 from sqlalchemy import TypeDecorator

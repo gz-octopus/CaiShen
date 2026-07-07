@@ -192,6 +192,7 @@ class TDXDataSource(DataSource):
             self.tq = tq
             self.tq.initialize(__file__)
             self._initialized = True
+            print("✅ 通达信数据源初始化成功")
             return True
         except Exception as e:
             print(f"通达信初始化失败: {e}")
@@ -577,7 +578,7 @@ def create_data_source(ctx, source_type: str):
         return ds
     return None
 
-@click.command(name='backtest', help='回测策略胜率')
+@click_util.command_with_abbrev(abbrev='bt', context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--stock', '-s', 'stocks', multiple=True, required=True, help='股票代码')
 @click.option('--strategy', '-g', 'strategy', type=click.Choice(list(STRATEGY_REGISTRY.keys())), 
               default='ma_cross', help='策略名称')
@@ -652,7 +653,7 @@ def backtest_cmd(ctx, stocks, strategy, start_date, end_date, source_type):
         console.print(f"\n[bold]📈 总体统计:[/bold] 总交易次数={total_trades}, "
                      f"总盈利次数={total_wins}, 总体胜率={overall_win_rate:.1f}%")
 
-@click.command(name='xg', help='选股')
+@click_util.command_with_abbrev(abbrev='xg', context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--strategy', '-g', 'strategy', type=click.Choice(list(STRATEGY_REGISTRY.keys())),
               required=True, help='选股策略')
 @click.option('--source-type', '-t', 'source_type', type=click.Choice(['tdx', 'mootdx', 'mt5']),
@@ -660,7 +661,7 @@ def backtest_cmd(ctx, stocks, strategy, start_date, end_date, source_type):
 @click.option('--top-n', '-n', default=20, help='返回前N只股票')
 @click.pass_context
 def xg_cmd(ctx, strategy, source_type, top_n):
-    """选股命令"""
+    """选股"""
     console = ctx.obj.get('console', Console())
     
     # 创建数据源

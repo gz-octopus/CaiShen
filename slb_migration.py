@@ -8,6 +8,7 @@ from rich import console
 from rich.console import Console
 
 from difoss_stock_util import *
+from difoss_stock_util.db_util import generate_engine_url_str
 from difoss_stock_util.color_log_util import *
 
 from sqlalchemy.orm import declared_attr, declarative_base
