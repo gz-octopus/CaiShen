@@ -27,3 +27,5 @@ mootdx:
   # ip: 112.74.214.43
   ip: 115.238.56.198
   port: 7709
+
+data_source: tdx
