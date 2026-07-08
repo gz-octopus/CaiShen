@@ -32,7 +32,7 @@ from difoss_stock_util.rich_util import *
 from difoss_stock_util.click_util import *
 from difoss_stock_util.color_log_util import *
 from difoss_stock_util.security_util import *
-from difoss_stock_util.util import print_locals
+from difoss_stock_util.util import print_locals, trace_function
 from difoss_stock_util.stock_util import calc_belong_trading_day, calc_count_of_trading_days, TradingInfo, is_st_stock
 from difoss_stock_util.db_util_lazy_loading import *
 from difoss_stock_util.metric_data.stock_metrics import StockMetrics
@@ -44,7 +44,7 @@ from typing import Optional, Dict, List
 from tdx_quant_util import *
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from time import sleep
+from time import sleep, time
 
 from cache_cmd import (STOCKS,
                        stocks_collector, blocks_collector, df_collector,
@@ -474,7 +474,7 @@ def send_bt_data(_ctx: click.Context,
                                     time_list = [x.strftime('%Y%m%d%H%M%S') for x in time_list],
                                     data_list=[d.split('|') for d in data_list],
                                     count=len(data_list)),
-            
+
             CONSOLE.print(f"发送 {full_code} 的回测数据，返回: {bt_data}")
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
@@ -772,8 +772,8 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
         db --set-db-type sqlite                          # 修改全局默认数据库类型
     """
     global DB_TYPE
-    CONSOLE = _ctx.obj['console']
-    CFG = _ctx.obj['cfg']
+    CONSOLE = _ctx.obj['console']  # type: Console
+    CFG = _ctx.obj['cfg']  # type: dict
 
     # ── 处理 --set-db-type ──
     if set_db_type:
@@ -1358,7 +1358,7 @@ def get_sector_list(_ctx: click.Context,
     **kwargs
 ):
     """获取A股板块代码列表（通达信板块、概念、行业等88开头的板块）"""
-    CONSOLE = _ctx.obj['console']
+    CONSOLE = _ctx.obj['console'] # type: Console
     # 管道模式：当本命令处于管道非末段（左侧/中间），后面有下游命令时，
     # 即使没有 -sm 也应该遍历板块获取成份股并返回，供下一段消费
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
@@ -1993,7 +1993,12 @@ def get_trading_dates(
 @click.option('--field-regex-inclusion', '-fri', 'field_regex_inclusions', multiple=True, callback=split_comma,
               help='需要从输出中包含的指标列名的正则表达式（可多选）')
 @click.option('--jump-tdx', '-j', 'jump_tdx', is_flag=True, help='跳转通达信界面（以获得L2指标数据）')
+@click.option('--save-db/--no-save-db', '-sdb', 'is_save_db', is_flag=True,
+              help='每获取完一只股票立即入库（边跑边存），无需通过 | db 管道')
+@click.option('--replace', '-r', 'is_replace', is_flag=True,
+              help='入库时替换已有记录（默认 merge，仅与 -sdb 配合生效）')
 @click.option('--with-name', '-wn', 'is_with_name', is_flag=True, help='股票代码是否带上股票名称')
+@trace_function
 @click.pass_context
 def formula(
     _ctx: click.Context,
@@ -2013,6 +2018,8 @@ def formula(
     field_inclusions: list[str],
     field_regex_inclusions: list[str],
     jump_tdx: bool,
+    is_save_db: bool,
+    is_replace: bool,
     is_with_name: bool,
     **kwargs,
 ):
@@ -2027,6 +2034,7 @@ def formula(
     print_locals()
 
     CONSOLE = _ctx.obj['console'] # type: Console
+    CFG = _ctx.obj['cfg']  # type: dict
 
     if not stocks:
         CONSOLE.print("⚠️ 股票列表为空，请使用 -s/--stock （或在 memory-cache 命令中缓存）指定。")
@@ -2089,11 +2097,18 @@ def formula(
 
         # ── 阶段3: 逐股票调用 ──
         formula_arg = ','.join(args)
+        formula_key = f"{name}|{','.join(args)}" if args else name
 
-        for _, full_code in enumerate(stocks):
+        # 准备工作：预先计算 DB URL（供 -sdb 边跑边存用）
+        _db_url = _assemble_db_url(DB_TYPE, CFG) if is_save_db else None
+        if _db_url:
+            StockMetrics.init_db(_db_url)
+
+        for stock_idx, full_code in enumerate(stocks):
             # NOTICE: 通达信缺陷：L2 数据需要软件先跳转（触发界面拉取后）才能获取，不然全是 0 值
-            if jump_tdx:
-                jump_res = tq.exec_to_tdx(url=f"http://www.treeid/code_{full_code[:6]}")
+            # 跳转逻辑：首只在循环内跳转，后续在上一轮末尾已提前跳转
+            if jump_tdx and stock_idx == 0:
+                tq.exec_to_tdx(url=f"http://www.treeid/code_{full_code[:6]}")
                 sleep(2)
 
             formula_set_res = tq.formula_set_data_info(stock_code=full_code, stock_period=period,
@@ -2183,6 +2198,31 @@ def formula(
                                         table_max_rows=max_to_show, printer=CONSOLE.print)
 
                 code_2_df[full_code] = df_cleaned if not df_cleaned.empty else df
+
+                # ── 准备下一轮：跳转下一页 → 落盘当前 → 补足 sleep ──
+                if stock_idx + 1 < len(stocks):
+                    _t0 = None
+                    if jump_tdx:
+                        tq.exec_to_tdx(url=f"http://www.treeid/code_{stocks[stock_idx + 1][:6]}")
+                        _t0 = time()
+
+                    # 落盘当前股票（在页面加载期间进行）
+                    if is_save_db and _is_zb and not df_cleaned.empty:
+                        StockMetrics.bulk_upsert_from_dfs(
+                            {full_code: df_cleaned}, formula_key, period,
+                            dividend_type, _db_url, replace=is_replace, console=CONSOLE)
+
+                    # 若落盘耗时 < 2s，补足剩余等待时间
+                    if _t0 is not None:
+                        _elapsed = time() - _t0
+                        if _elapsed < 2:
+                            sleep(2 - _elapsed)
+                else:
+                    # 最后一只股票：直接落盘
+                    if is_save_db and _is_zb and not df_cleaned.empty:
+                        StockMetrics.bulk_upsert_from_dfs(
+                            {full_code: df_cleaned}, formula_key, period,
+                            dividend_type, _db_url, replace=is_replace, console=CONSOLE)
 
         # ── 阶段4: 结果输出（类型分发） ──
         if verbose:
@@ -2277,6 +2317,8 @@ count 最大值为 24000，count为 -1 时为获取对应股票全部K线''')
               help='选择输出结果的样式')
 @click.option('-zb-sum-col', '-sc', 'sum_columns', multiple=True, callback=split_comma, help='需要统计sum的列（可多选），仅 -t zb 生效')
 @click.option('--save-user-sector', '-sus', 'is_save_user_sector', is_flag=True, help='是否将选股结果保存到自定义板块中（仅 -t xg 生效）')
+@click.option('--save-db/--no-save-db', '-sdb', 'is_save_db', is_flag=True,
+              help='每只股票结果立即入库（边跑边存），无需通过 | db 管道（仅 -t zb 生效）')
 @click.pass_context
 def formula_multi(
     _ctx: click.Context,
@@ -2308,6 +2350,7 @@ def formula_multi(
     output_style: str,
     sum_columns: list[str],
     is_save_user_sector: bool,
+    is_save_db: bool,
     cache_stocks: bool,
     stock_group_index: int,
     is_save_df: bool,
@@ -2479,6 +2522,15 @@ def formula_multi(
                 for stock_code, stock_df in stock_dfs.items():
                     print_dataframe(stock_df, title=f"{stock_code}|{get_stock_name(stock_code,'')} 在 [yellow]{name}[/yellow] 指标的值", sum_cols=sum_columns, printer=CONSOLE.print)
 
+                    # 边跑边存：每只股票立即入库
+                    if is_save_db and formula_type == 'zb' and not stock_df.empty:
+                        formula_key = f"{name}|{','.join(args)}" if args else name
+                        db_url = _assemble_db_url(DB_TYPE, CFG)
+                        StockMetrics.init_db(db_url)
+                        StockMetrics.bulk_upsert_from_dfs(
+                            {stock_code: stock_df}, formula_key, period,
+                            dividend_type, db_url, console=CONSOLE)
+
                 if is_save_df:
                     formula_key = f"{name}|{','.join(args)}" if args else name
                     return {'dfs': stock_dfs, 'period': period,
@@ -2543,9 +2595,13 @@ def _example(_ctx: click.Context,
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS,
               help='股票代码列表（管道中由上游自动注入，也可手动传参）')
+@click.option('--verbose', '-v', 'verbose', is_flag=True, help='详细模式')
+@click.option('--max-to-show', '-max', 'max_to_show', default=20, show_default=True, type=int, help='最多显示多少条数据')
 @click.pass_context
 def print_pipe(_ctx: click.Context,
     stocks: list[str],
+    verbose: bool,
+    max_to_show: int,
 ):
     """打印管道接收到的数据（用于测试管道功能）
 
@@ -2558,11 +2614,14 @@ def print_pipe(_ctx: click.Context,
     复杂类型（df / dfs）通过 _pipe_data 传递，本命令从 ctx.obj 显式读取。
     """
     CONSOLE = _ctx.obj['console']  # type: Console
+    if verbose:
+        CONSOLE.print(f"ctx.obj = { {k: v for k, v in _ctx.obj.items() if k.startswith('_')} }")
+        return
 
     # ── 1. 简单类型：由 click.option 接收（管道引擎自动注入） ──
     if stocks:
         CONSOLE.print(f"\n[bold cyan]📦 stocks[/bold cyan] （[bold]{len(stocks)}[/bold] 只）:")
-        CONSOLE.print(Pretty(stocks, max_length=30) if len(stocks) > 30 else list(stocks))
+        CONSOLE.print(Pretty(stocks, max_length=max_to_show) if len(stocks) > max_to_show else list(stocks))
     else:
         CONSOLE.print("[dim]📦 stocks: (空)[/dim]")
 
@@ -2602,5 +2661,25 @@ def print_pipe(_ctx: click.Context,
                     CONSOLE.print(f"  [cyan]{code}[/cyan]  type={type(s_df).__name__} (非 DataFrame)")
         else:
             CONSOLE.print("[dim]📚 dfs: (空)[/dim]")
+            
+    # —— 2c. blocks ——
+    _blocks = pipe_data.get('blocks')
+    if _blocks:
+        CONSOLE.print(f"\n[bold cyan]📦 blocks[/bold cyan] （[bold]{len(_blocks)}[/bold] 个板块）:")
+        CONSOLE.print(Pretty(_blocks, max_length=max_to_show) if len(_blocks) > max_to_show else list(_blocks))
 
 
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--block', '-b', 'blocks', multiple=True, callback=split_comma_stocks, required=True, help='通达信板块代码列表 (如: 880672.SH，可带半角逗号分隔)')
+@click.pass_context
+def blocks_2_stocks(_ctx: click.Context,
+    blocks: list[str],
+):
+    """把 blocks 直接放到 stocks 中，方便后续管道使用"""
+    CONSOLE = _ctx.obj['console'] # type: Console
+
+    try:
+        return {'stocks': blocks}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)

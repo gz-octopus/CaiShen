@@ -54,6 +54,8 @@ _lock = threading.RLock()
 class CacheManager:
     """统一管理缓存逻辑，避免装饰器直接操作 global 变量"""
     def update_stocks(self, codes: Iterable):
+        if not codes:
+            return
         global STOCKS
         old_len = len(STOCKS)
         STOCKS.update(codes)
@@ -61,6 +63,8 @@ class CacheManager:
 
     def update_group_stocks(self, group_index, codes: Iterable):
         """将数据处理后存入指定分组"""
+        if not codes:
+            return
         global GROUPED_STOCKS
 
         # 确保分组存在
@@ -129,6 +133,8 @@ class CacheManager:
         # click.echo(f"【update_dataframe_by_stock】code={code}, len(df)={STOCK_2_DF[code].shape}")
 
     def update_blocks(self, codes: Iterable):
+        if not codes:
+            return
         global BLOCKS
         old_len = len(BLOCKS)
         BLOCKS.update(codes)
