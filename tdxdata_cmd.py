@@ -1603,6 +1603,175 @@ def get_stocks(_ctx: click.Context,
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
 
 
+# ---------------------------------------------------------------------------------------------
+# 个股板块归属 & 涨幅统计
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@blocks_collector
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
+              default=STOCKS, required=True, help='股票代码列表 (如: 603358.SH)')
+@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+              help='日期（默认：最近一个交易日 15:00 为界）')
+@click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的板块详情）')
+@click.option('--max-to-show', '-max', 'max_to_show', default=30, show_default=True, type=int,
+              help='最多显示多少条板块记录')
+@click.pass_context
+def stock_block_stat(_ctx: click.Context,
+    stocks: list[str],
+    date: datetime | None,
+    is_verbose: bool,
+    max_to_show: int,
+    cache_blocks: bool,
+    block_group_index: int,
+):
+    """获取个股涨幅及其所属通达信板块统计
+
+    对每只输入股票：
+    1. 获取指定日期的 K 线数据，计算涨幅（(今收-昨收)/昨收 * 100）
+    2. 通过 tq.get_relation 获取所属的全部通达信板块
+    3. 按板块聚合：统计每个板块下有多少只输入个股，以及板块内个股的均涨幅
+    4. 返回 {'blocks': list[str]} 供管道下游消费
+
+    使用示例：
+        stock_block_stat -s 603358.SH -s 600000.SH           # 指定个股
+        gsls -c 华为 | stock_block_stat                       # 管道：板块个股 → 板块再统计
+        stock_block_stat -s 603358.SH | gsls -c 概念           # 管道：个股 → 板块列表 → 反查
+    """
+    CONSOLE = _ctx.obj['console']  # type: Console
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
+
+    # 确定交易日期
+    if date is None:
+        now_dt = datetime.now()
+        trading_date = calc_belong_trading_day(now_dt, datetime_time(hour=15))
+    else:
+        trading_date = date
+
+    trading_date_str = trading_date.strftime('%Y%m%d')
+
+    print_locals()
+
+    try:
+        stocks_list = list(stocks)
+        if not stocks_list:
+            CONSOLE.print("[red]未提供任何股票代码[/red]")
+            return
+
+        from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
+
+        # ── Step 1: 获取 K 线数据，计算每只个股的涨幅 ──
+        progress_print(f"[bold]STEP 1/3[/bold] 获取 {len(stocks_list)} 只个股在 {trading_date_str} 附近的 K 线数据...")
+        dict_df = tq.get_market_data(
+            field_list=['Close'],
+            stock_list=stocks_list,
+            end_time=trading_date.strftime('%Y%m%d%H%M%S'),
+            count=2,
+            dividend_type='front',
+            period='1d',
+            fill_data=False,
+        )  # type: Dict[str, pd.DataFrame]
+
+        stock_change_pct = {}  # stock_code (full_code) → 涨跌幅%
+        for full_code, df in dict_df.items():
+            if df is None or df.empty:
+                stock_change_pct[full_code] = None
+                continue
+            closes = df['Close'].values
+            if len(closes) >= 2:
+                prev_close = closes[-2]
+                today_close = closes[-1]
+                if prev_close and prev_close != 0:
+                    change_pct = (today_close - prev_close) / prev_close * 100
+                    stock_change_pct[full_code] = round(change_pct, 2)
+                else:
+                    stock_change_pct[full_code] = 0.0
+            else:
+                stock_change_pct[full_code] = 0.0
+
+        valid_count = sum(1 for v in stock_change_pct.values() if v is not None)
+        progress_print(f"   涨幅计算完成：{valid_count}/{len(stocks_list)} 只有效数据")
+
+        # ── Step 2: 获取每只个股的所属板块 ──
+        progress_print(f"[bold]STEP 2/3[/bold] 获取个股所属板块...")
+        all_blocks = set()
+        block_to_stocks = defaultdict(list)
+        block_to_name = {}
+        stock_details = []  # 用于 verbose 打印
+
+        for _, stock_code in enumerate_with_progress(stocks_list, task_name="获取个股所属板块"):
+            code = SecurityCode(stock_code)
+            full_code = code.full_code
+            short_code = code.short_code
+
+            blocks = tq.get_relation(stock_code=full_code)
+
+            block_codes = []
+            if blocks and isinstance(blocks, list):
+                for b in blocks:
+                    if isinstance(b, dict):
+                        bc = b.get('Code', '')
+                        bn = b.get('Name', '')
+                    elif isinstance(b, str):
+                        bc = b
+                        bn = ''
+                    else:
+                        continue
+                    if bc:
+                        block_codes.append(bc)
+                        all_blocks.add(bc)
+                        block_to_stocks[bc].append(full_code)
+                        if bc not in block_to_name and bn:
+                            block_to_name[bc] = bn
+
+            if is_verbose:
+                change = stock_change_pct.get(full_code)
+                stock_details.append({
+                    '股票代码': short_code,
+                    '股票名称': get_stock_name(full_code) or '',
+                    '涨幅%': f"{change:.2f}" if change is not None else '无数据',
+                    '所属板块数': len(block_codes),
+                    '板块列表': ', '.join(block_codes[:5]) + ('...' if len(block_codes) > 5 else ''),
+                })
+
+        # ── Step 3: 聚合统计并打印 ──
+        progress_print(f"[bold]STEP 3/3[/bold] 聚合板块统计...")
+        block_stats = []
+        for block_code, stocks_in_block in block_to_stocks.items():
+            block_name = block_to_name.get(block_code, '')
+            changes = [stock_change_pct.get(s) for s in stocks_in_block
+                       if stock_change_pct.get(s) is not None]
+            avg_change = round(sum(changes) / len(changes), 2) if changes else 0
+
+            block_stats.append({
+                '板块代码': block_code,
+                '板块名称': block_name,
+                '个股数': len(stocks_in_block),
+                '均涨幅%': avg_change,
+            })
+
+        # 按个股数降序
+        block_stats.sort(key=lambda x: x['个股数'], reverse=True)
+        df_stats = pd.DataFrame(block_stats)
+
+        CONSOLE.print(f"\n[bold]📊 板块归属统计[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
+                      f"个股: [yellow]{len(stocks_list)}[/yellow] 只，"
+                      f"涉及板块: [yellow]{len(all_blocks)}[/yellow] 个")
+        print_dataframe(df_stats.head(max_to_show),
+                        title=f"板块聚合（按个股数降序，前 {min(max_to_show, len(df_stats))} 条）",
+                        show_footer=True, printer=CONSOLE.print)
+
+        if is_verbose:
+            df_detail = pd.DataFrame(stock_details)
+            print_dataframe(df_detail, title="个股详情",
+                            show_footer=True, printer=CONSOLE.print)
+
+        # ── 管道返回 ──
+        if cache_blocks or _is_pipe_producer:
+            return {'blocks': all_blocks}
+
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
 # 衍生快捷命令 --------------
 
 # ---------------------------------------------------------------------------------------------
@@ -1645,6 +1814,7 @@ def order_stock(_ctx: click.Context,
 # ---------------------------------------------------------------------------------------------
 # 自选股/自定义板块
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
 @click.option('-c', '--contains', 'contains', multiple=True, callback=split_comma, help='包含的字串')
 @click.option('-v', '--verbose', 'is_verbose', is_flag=True, help='是否打印详细信息')
 @click.option('-max', '--max-to-show', 'max_to_show', default=20, show_default=True, type=int, help='最多显示多少只股票（仅 is_verbose=True 时有效）')
@@ -1654,9 +1824,17 @@ def get_user_sector(
     contains: list[str], # 用于查找
     is_verbose: bool,
     max_to_show: int,
+    cache_stocks: bool,
+    stock_group_index: int,
+    **kwargs,
 ):
-    """获取自定义板块列表"""
+    """获取自定义板块列表
+
+    管道返回 {'stocks': set[str], 'user_blocks': list[{'Code': ..., 'Name': ...}]}
+    user_blocks 与标准 blocks (88XXXX.SH) 不同，是用户自定义板块的 Code/Name 对。
+    """
     CONSOLE = _ctx.obj['console'] # type: Console
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     try:
         sectors = tq.get_user_sector() # type: list[str, dict]
@@ -1679,9 +1857,14 @@ def get_user_sector(
             else:
                 CONSOLE.print(f"自定义板块，共 {len(sectors)} 个。")
 
+            # 管道收集：板块 {Code, Name} + 板块内的个股
+            user_blocks = []
+            all_stocks_in_sectors = set()
+
             sector_detail_infos = []
             for sector_info in sectors_filtered if sectors_filtered else sectors:
                 _code = sector_info.get('Code', '')
+                _name = sector_info.get('Name', '')
                 _stocks_in_sector = tq.get_stock_list_in_sector(block_code=_code, block_type=1, list_type=1)
                 _stocks_num = len(_stocks_in_sector) if _stocks_in_sector else 0
 
@@ -1690,11 +1873,23 @@ def get_user_sector(
                     _detail_info.update({"Stocks": [f"{stock.get('Code', '')} {stock.get('Name', '')}" for stock in _stocks_in_sector]})
                 sector_detail_infos.append(_detail_info)
 
+                # 管道：收集板块和个股
+                if cache_stocks or _is_pipe_producer:
+                    if _code:
+                        user_blocks.append({'Code': _code, 'Name': _name})
+                    if _stocks_in_sector:
+                        all_stocks_in_sectors.update([_get(x) for x in _stocks_in_sector if x])
+
             # 创建 DataFrame 并按 stock.num 排序
             df = pd.DataFrame(sector_detail_infos)
             df_sorted = df.sort_values(by='stock.num', ascending=False)
             print_dataframe(df_sorted, f'自定义板块概要{f"（过滤含有 {contains} 的板块）" if sectors_filtered else ""}',
                             printer=CONSOLE.print)
+
+            # ── 管道返回 ──
+            if cache_stocks or _is_pipe_producer:
+                return {'stocks': all_stocks_in_sectors,
+                        'user_blocks': user_blocks}
         else:
             CONSOLE.print(f"未发现自定义板块")
     except Exception as e:
@@ -2368,6 +2563,7 @@ def formula_multi(
     print_locals()
 
     CONSOLE = _ctx.obj['console'] # type: Console
+    CFG = _ctx.obj['cfg'] # type: dict
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     try:
@@ -2536,6 +2732,99 @@ def formula_multi(
                     return {'dfs': stock_dfs, 'period': period,
                             'formula_key': formula_key, 'dividend_type': dividend_type,
                             '_source': 'stock_metrics'}
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+# ---------------------------------------------------------------------------------------------
+# 查询已存储的指标数据
+@command_with_abbrev(abbrev='gsm', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
+              default=STOCKS, required=True, help='股票代码列表 (如: 603337.SH)')
+@click.option('--period', '-p', 'period', default='1d',
+              type=click.Choice(ALL_PERIODS), show_default=True, help='K线周期')
+@click.option('--dividend-type', '-d', 'dividend_type', default=1, show_default=True,
+              help='0不复权 1前复权 2后复权')
+@click.option('--start-time', '-st', 'start_time', type=DATETIME, help='开始时间')
+@click.option('--end-time', '-et', 'end_time', type=DATETIME, default=datetime.now(),
+              help='结束时间（默认当前时间）')
+@click.option('--count', '-c', 'count', default=20, type=int,
+              help='返回最近 N 条记录（count>0 时忽略 start_time）')
+@click.option('--formula-key', '-fk', 'formula_key',
+              help='按公式 key 过滤（如 L2_DATA|0，不传则返回全部）')
+@click.option('--indicator-key', '-ik', 'indicator_key',
+              help='进一步提取特定指标值（如 DDX）')
+@click.option('--db-type', '-db', 'db_type', default=None,
+              type=click.Choice(ALL_DB_LIST, case_sensitive=False),
+              help=f'数据库类型（默认: {DB_TYPE}）')
+@click.pass_context
+def get_stock_metrics(_ctx: click.Context,
+                       stocks: list[str],
+                       period: str,
+                       dividend_type: int,
+                       start_time: datetime | None,
+                       end_time: datetime | None,
+                       count: int,
+                       formula_key: str,
+                       indicator_key: str,
+                       db_type: str):
+    """从 stock_metrics 表查询已存储的公式指标数据
+
+    用法示例：
+        gsm -s 603337.SH -fk L2_DATA                          # 查询全部 L2_DATA 指标
+        gsm -s 603337.SH -fk L2_DATA -ik DDX -c 5             # 查最近5天 DDX 值
+        gsm -s 603337.SH,600000.SH -fk MY_MR_ZJLX|1 -c 10     # 多只股票
+    """
+    CONSOLE = _ctx.obj['console']  # type: Console
+    CFG = _ctx.obj['cfg']  # type: dict
+
+    if db_type is None:
+        db_type = DB_TYPE
+
+    # 时间处理
+    if start_time:
+        start_time_str = start_time.strftime('%Y-%m-%d')
+    else:
+        # count>0: 截取最近N条，往后推足够远
+        start_time_str = '2000-01-01'
+
+    if end_time:
+        end_time_str = end_time.strftime('%Y-%m-%d')
+    else:
+        end_time_str = datetime.now().strftime('%Y-%m-%d')
+
+    print_locals()
+
+    try:
+        db_url = _assemble_db_url(db_type, CFG)
+
+        for full_code in stocks:
+            rows = StockMetrics.query(
+                db_url, full_code, period,
+                start_time_str, end_time_str,
+                dividend_type=dividend_type,
+                formula_key=formula_key,
+                indicator_key=indicator_key,
+            )
+
+            # 限制返回条数（count > 0 时）
+            if count > 0:
+                rows = rows[:count]
+
+            if not rows:
+                CONSOLE.print(f"[dim]{full_code} {get_stock_name(full_code)} — 无数据[/dim]")
+                continue
+
+            # 转为 DataFrame 展示
+            df = pd.DataFrame(rows)
+            if 'time' in df.columns:
+                df.set_index('time', inplace=True)
+            title = (f"{full_code} {get_stock_name(full_code)} "
+                     f"指标: {formula_key or '全部'}"
+                     f"{' → ' + indicator_key if indicator_key else ''}"
+                     f" (period={period}, dividend_type={dividend_type})")
+            print_dataframe(df, title=title, show_footer=True, printer=CONSOLE.print)
+
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
 

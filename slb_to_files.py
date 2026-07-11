@@ -119,6 +119,8 @@ def main(
     """把股票（或特定市场上的所有股票）的扫雷宝数据（json）保存到本地文件中
     """
 
+    I(NOW_DT=NOW_DT, BELONG_TRADING_DATE=BELONG_TRADING_DATE)
+    
     print_locals()
 
     if very_verbose:
