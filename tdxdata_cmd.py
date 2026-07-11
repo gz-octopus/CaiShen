@@ -1605,7 +1605,7 @@ def get_stocks(_ctx: click.Context,
 
 # ---------------------------------------------------------------------------------------------
 # 个股板块归属 & 涨幅统计
-@command_with_abbrev(abbrev='sbs', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @blocks_collector
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
               default=STOCKS, required=False, help='股票代码列表 (如: 603358.SH)。管道模式下可从上游自动获取')
