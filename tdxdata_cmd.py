@@ -1632,9 +1632,9 @@ def stock_block_stat(_ctx: click.Context,
     4. 返回 {'blocks': list[str]} 供管道下游消费
 
     使用示例：
-        stock_block_stat -s 603358.SH -s 600000.SH           # 指定个股
-        gsls -c 华为 | stock_block_stat                       # 管道：板块个股 → 板块再统计
-        stock_block_stat -s 603358.SH | gsls -c 概念           # 管道：个股 → 板块列表 → 反查
+        sbs -s 603358.SH -s 600000.SH              # 指定个股
+        gs -m 自选股 | sbs                         # 管道：自选股 → 板块统计
+        gsl -c 华为 | sbs                          # 管道：概念板块个股 → 板块统计
     """
     CONSOLE = _ctx.obj['console']  # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
@@ -1668,10 +1668,13 @@ def stock_block_stat(_ctx: click.Context,
             dividend_type='front',
             period='1d',
             fill_data=False,
-        )  # type: Dict[str, pd.DataFrame]
+        )  # type: Dict[str, pd.DataFrame]  -- field-first: {'Close': DataFrame(columns=stocks, index=dates)}
+
+        # tq.get_market_data 返回 field-first 结构，需转为 stock-first
+        stock_2_df = transform_field_to_stock_fast(dict_df)  # → {stock_code: DataFrame(columns=['Close'], index=dates)}
 
         stock_change_pct = {}  # stock_code (full_code) → 涨跌幅%
-        for full_code, df in dict_df.items():
+        for full_code, df in stock_2_df.items():
             if df is None or df.empty:
                 stock_change_pct[full_code] = None
                 continue
@@ -1882,6 +1885,7 @@ def get_user_sector(
 
             # 创建 DataFrame 并按 stock.num 排序
             df = pd.DataFrame(sector_detail_infos)
+            D("[test]", df=df)
             df_sorted = df.sort_values(by='stock.num', ascending=False)
             print_dataframe(df_sorted, f'自定义板块概要{f"（过滤含有 {contains} 的板块）" if sectors_filtered else ""}',
                             printer=CONSOLE.print)
