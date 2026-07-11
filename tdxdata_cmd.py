@@ -1611,6 +1611,9 @@ def get_stocks(_ctx: click.Context,
               default=STOCKS, required=False, help='股票代码列表 (如: 603358.SH)。管道模式下可从上游自动获取')
 @click.option('--date', '-d', 'date', type=DATETIME, default=None,
               help='日期（默认：最近一个交易日 15:00 为界）')
+@click.option('--block-type', '-t', 'block_types', multiple=True, default=['概念'],
+              type=click.Choice(['概念', '行业', '地域', '风格', '自定义']),
+              help='板块类型')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的板块详情）')
 @click.option('--max-to-show', '-max', 'max_to_show', default=30, show_default=True, type=int,
               help='最多显示多少条板块记录')
@@ -1618,6 +1621,7 @@ def get_stocks(_ctx: click.Context,
 def stock_block_stat(_ctx: click.Context,
     stocks: list[str],
     date: datetime | None,
+    block_types: list[str],
     is_verbose: bool,
     max_to_show: int,
     cache_blocks: bool,
@@ -1668,7 +1672,7 @@ def stock_block_stat(_ctx: click.Context,
             dividend_type='front',
             period='1d',
             fill_data=False,
-        )  # type: Dict[str, pd.DataFrame]  -- field-first: {'Close': DataFrame(columns=stocks, index=dates)}
+        )  # type: Dict[str, pd.DataFrame] # -- field-first: {'Open': DataFrame(columns=stocks, index=dates)}
 
         # tq.get_market_data 返回 field-first 结构，需转为 stock-first
         stock_2_df = transform_field_to_stock_fast(dict_df)  # → {stock_code: DataFrame(columns=['Close'], index=dates)}
@@ -1695,9 +1699,8 @@ def stock_block_stat(_ctx: click.Context,
 
         # ── Step 2: 获取每只个股的所属板块 ──
         progress_print(f"[bold]STEP 2/3[/bold] 获取个股所属板块...")
-        all_blocks = set()
-        block_to_stocks = defaultdict(list)
-        block_to_name = {}
+        block_to_stocks = defaultdict(list) # 记录每个板块下的个股列表（仅在筛选样本 stocks 中）
+        block_2_infos = {}
         stock_details = []  # 用于 verbose 打印
 
         for _, stock_code in enumerate_with_progress(stocks_list, task_name="获取个股所属板块"):
@@ -1707,48 +1710,67 @@ def stock_block_stat(_ctx: click.Context,
 
             blocks = tq.get_relation(stock_code=full_code)
 
-            block_codes = []
+            block_infos = [] # 记录该个股的板块信息
             if blocks and isinstance(blocks, list):
                 for b in blocks:
-                    if isinstance(b, dict):
-                        bc = b.get('Code', '')
-                        bn = b.get('Name', '')
-                    elif isinstance(b, str):
-                        bc = b
-                        bn = ''
-                    else:
-                        continue
-                    if bc:
-                        block_codes.append(bc)
-                        all_blocks.add(bc)
-                        block_to_stocks[bc].append(full_code)
-                        if bc not in block_to_name and bn:
-                            block_to_name[bc] = bn
+                    if not isinstance(b, dict):
+                        W("tq.get_relation 返回的板块信息不是 dict，请检查API是否更新", stock_code=full_code, block_info=b)
+                        return
+
+                    bc = b.get('BlockCode', '')
+                    bn = b.get('BlockName', '')
+                    bt = b.get('BlockType', '')
+                    gn_num = b.get('GPNume', 0) # 成份股数量
+                    if block_types and bt not in block_types:
+                        continue # 跳过不在统计范围内的板块
+                    
+                    if bc not in block_2_infos:
+                        block_2_infos[bc] = {
+                            'BlockName': bn,
+                            'BlockType': bt,
+                            'GPNume': gn_num,
+                        }
+
+                    block_infos.append('|'.join([bc, bn, bt, str(gn_num)]))
+
+                    block_to_stocks[bc].append(full_code)
 
             if is_verbose:
-                change = stock_change_pct.get(full_code)
+                change = stock_change_pct.get(full_code, None)
                 stock_details.append({
-                    '股票代码': short_code,
-                    '股票名称': get_stock_name(full_code) or '',
-                    '涨幅%': f"{change:.2f}" if change is not None else '无数据',
-                    '所属板块数': len(block_codes),
-                    '板块列表': ', '.join(block_codes[:5]) + ('...' if len(block_codes) > 5 else ''),
+                    '股票代码': full_code,
+                    '股票名称': get_stock_name(full_code, ''),
+                    '涨幅%': change if change is not None else np.nan,
+                    '所属板块数': len(block_infos),
+                    '板块列表': block_infos,
                 })
 
         # ── Step 3: 聚合统计并打印 ──
         progress_print(f"[bold]STEP 3/3[/bold] 聚合板块统计...")
         block_stats = []
         for block_code, stocks_in_block in block_to_stocks.items():
-            block_name = block_to_name.get(block_code, '')
+            block_name = block_2_infos.get(block_code, {}).get('BlockName', '')
             changes = [stock_change_pct.get(s) for s in stocks_in_block
                        if stock_change_pct.get(s) is not None]
             avg_change = round(sum(changes) / len(changes), 2) if changes else 0
+            
+            # 版块实时更多信息
+            block_more_info = tq.get_more_info(stock_code=block_code, field_list=['fHSL', 'fLianB', 'Zjl', 'Zjl_HB'])
+            # 板块快照信息
+            block_snapshot = tq.get_market_snapshot(stock_code=block_code, field_list=['Inside', 'Outside', 'UpHome', 'DownHome'])
 
             block_stats.append({
                 '板块代码': block_code,
                 '板块名称': block_name,
+                '板块成分股数量': block_2_infos.get(block_code, {}).get('GPNume', 0),
                 '个股数': len(stocks_in_block),
                 '均涨幅%': avg_change,
+                '涨/停': f"{block_snapshot.get('UpHome', 0)}|{block_snapshot.get('Outside', 0)}",
+                '跌/跌停': f"{block_snapshot.get('DownHome', 0)}|{block_snapshot.get('Inside', 0)}",
+                '换手率%': float(block_more_info.get('fHSL', '0')),
+                '量比': float(block_more_info.get('fLianB', '0')),
+                '主买净额(亿)': float(block_more_info.get('Zjl', '0')) / 10000,
+                '主力净额(亿)': float(block_more_info.get('Zjl_HB', '0')) / 10000,
             })
 
         # 按个股数降序
@@ -1757,7 +1779,7 @@ def stock_block_stat(_ctx: click.Context,
 
         CONSOLE.print(f"\n[bold]📊 板块归属统计[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
                       f"个股: [yellow]{len(stocks_list)}[/yellow] 只，"
-                      f"涉及板块: [yellow]{len(all_blocks)}[/yellow] 个")
+                      f"涉及板块: [yellow]{len(block_2_infos.keys())}[/yellow] 个")
         print_dataframe(df_stats.head(max_to_show),
                         title=f"板块聚合（按个股数降序，前 {min(max_to_show, len(df_stats))} 条）",
                         show_footer=True, printer=CONSOLE.print)
@@ -1769,7 +1791,7 @@ def stock_block_stat(_ctx: click.Context,
 
         # ── 管道返回 ──
         if cache_blocks or _is_pipe_producer:
-            return {'blocks': all_blocks}
+            return {'blocks': list(block_2_infos.keys())}
 
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
@@ -2224,11 +2246,10 @@ def formula(
 ):
     """调用通达信公式进行计算（技术指标zb/条件选股xg/专家系统exp）公式
 
-    可通过 -fe/-fre/-fi/-fri 参数过滤输出指标列名，默认排除 OUTPUT 开头的字段：
-    - -fe/--field-exclusion: 排除包含指定字符串的字段名
-    - -fre/--field-regex-exclusion: 正则排除字段名（默认 ^OUTPUT\\d+）
-    - -fi/--field-inclusion: 仅保留包含指定字符串的字段名
-    - -fri/--field-regex-inclusion: 正则保留字段名
+    支持：
+    - 【指标公式】筛选（-fre参数默认过滤 OUTPUT* 等无意义的字段）、入库、管道输出等功能；
+    - 【选股公式】列出所有可用公式、查找公式、获取公式详细信息等功能，
+    但不支持选股后直接存于tdx自定义板块中（请使用 formula_multi 命令）。
     """
     print_locals()
 
@@ -2954,7 +2975,7 @@ def print_pipe(_ctx: click.Context,
                     CONSOLE.print(f"  [cyan]{code}[/cyan]  type={type(s_df).__name__} (非 DataFrame)")
         else:
             CONSOLE.print("[dim]📚 dfs: (空)[/dim]")
-            
+
     # —— 2c. blocks ——
     _blocks = pipe_data.get('blocks')
     if _blocks:
