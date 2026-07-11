@@ -1651,17 +1651,9 @@ def stock_block_stat(_ctx: click.Context,
     print_locals()
 
     try:
-        # 合并 stocks：CLI 参数 + 管道上游数据 + 内存缓存
-        pipe_data = _ctx.obj.get('_pipe_data', {})
-        stocks_set = set(stocks)
-        if pipe_data:
-            pipe_stocks = pipe_data.get('stocks', set())
-            if pipe_stocks:
-                stocks_set.update(pipe_stocks)
-                I(管道传入个股=len(pipe_stocks), 合并后总数=len(stocks_set))
-        stocks_list = list(stocks_set)
+        stocks_list = list(stocks)
         if not stocks_list:
-            CONSOLE.print("[red]未提供任何股票代码（-s 参数 或 管道上游 均无数据）[/red]")
+            CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
             return
 
         from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
