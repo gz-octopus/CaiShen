@@ -40,12 +40,12 @@ CONSOLE = Console()
 CFG = None
 CONFIG_PATH = 'config.yaml'  # 默认配置文件路径
 
-def cache_stock_name_of_market(market='所有A股'):
+def cache_stock_name_of_market(market: str = None):
     """把 market 指定的个股 code -> name 缓存到 cache_cmd 中"""
     # 获取A股 Code -> Name
     code2name = {}
     st_code2name = {}
-    stocks_info = tq.get_stock_list(market='所有A股', list_type=1)
+    stocks_info = tq.get_stock_list(market=market, list_type=1)
     for stock_info in stocks_info:
         if isinstance(stock_info, dict):
             code = stock_info.get('Code') # type: str | None
