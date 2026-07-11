@@ -1605,10 +1605,10 @@ def get_stocks(_ctx: click.Context,
 
 # ---------------------------------------------------------------------------------------------
 # 个股板块归属 & 涨幅统计
-@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@command_with_abbrev(abbrev='sbs', context_settings={'help_option_names': ['-?', '--help', '-h']})
 @blocks_collector
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
-              default=STOCKS, required=True, help='股票代码列表 (如: 603358.SH)')
+              default=STOCKS, required=False, help='股票代码列表 (如: 603358.SH)。管道模式下可从上游自动获取')
 @click.option('--date', '-d', 'date', type=DATETIME, default=None,
               help='日期（默认：最近一个交易日 15:00 为界）')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的板块详情）')
@@ -1651,9 +1651,17 @@ def stock_block_stat(_ctx: click.Context,
     print_locals()
 
     try:
-        stocks_list = list(stocks)
+        # 合并 stocks：CLI 参数 + 管道上游数据 + 内存缓存
+        pipe_data = _ctx.obj.get('_pipe_data', {})
+        stocks_set = set(stocks)
+        if pipe_data:
+            pipe_stocks = pipe_data.get('stocks', set())
+            if pipe_stocks:
+                stocks_set.update(pipe_stocks)
+                I(管道传入个股=len(pipe_stocks), 合并后总数=len(stocks_set))
+        stocks_list = list(stocks_set)
         if not stocks_list:
-            CONSOLE.print("[red]未提供任何股票代码[/red]")
+            CONSOLE.print("[red]未提供任何股票代码（-s 参数 或 管道上游 均无数据）[/red]")
             return
 
         from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
