@@ -2930,7 +2930,6 @@ def print_pipe(_ctx: click.Context,
     CONSOLE = _ctx.obj['console']  # type: Console
     if verbose:
         CONSOLE.print(f"ctx.obj = { {k: v for k, v in _ctx.obj.items() if k.startswith('_')} }")
-        return
 
     # ── 1. 简单类型：由 click.option 接收（管道引擎自动注入） ──
     if stocks:
