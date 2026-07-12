@@ -1723,7 +1723,7 @@ def stock_block_stat(_ctx: click.Context,
                     gn_num = b.get('GPNume', 0) # 成份股数量
                     if block_types and bt not in block_types:
                         continue # 跳过不在统计范围内的板块
-                    
+
                     if bc not in block_2_infos:
                         block_2_infos[bc] = {
                             'BlockName': bn,
@@ -1753,7 +1753,7 @@ def stock_block_stat(_ctx: click.Context,
             changes = [stock_change_pct.get(s) for s in stocks_in_block
                        if stock_change_pct.get(s) is not None]
             avg_change = round(sum(changes) / len(changes), 2) if changes else 0
-            
+
             # 版块实时更多信息
             block_more_info = tq.get_more_info(stock_code=block_code, field_list=['fHSL', 'fLianB', 'Zjl', 'Zjl_HB'])
             # 板块快照信息
@@ -1765,7 +1765,7 @@ def stock_block_stat(_ctx: click.Context,
                 '板块成分股数量': block_2_infos.get(block_code, {}).get('GPNume', 0),
                 '个股数': len(stocks_in_block),
                 '均涨幅%': avg_change,
-                '涨/停': f"{block_snapshot.get('UpHome', 0)}|{block_snapshot.get('Outside', 0)}",
+                '涨/涨停': f"{block_snapshot.get('UpHome', 0)}|{block_snapshot.get('Outside', 0)}",
                 '跌/跌停': f"{block_snapshot.get('DownHome', 0)}|{block_snapshot.get('Inside', 0)}",
                 '换手率%': float(block_more_info.get('fHSL', '0')),
                 '量比': float(block_more_info.get('fLianB', '0')),
@@ -2250,11 +2250,15 @@ def formula(
     - 【指标公式】筛选（-fre参数默认过滤 OUTPUT* 等无意义的字段）、入库、管道输出等功能；
     - 【选股公式】列出所有可用公式、查找公式、获取公式详细信息等功能，
     但不支持选股后直接存于tdx自定义板块中（请使用 formula_multi 命令）。
+    如果要入库带有 L2数据的指标数据，请做好以下准备：
+    1. 在配置文件中配置数据库连接信息（[db] 节）和启动数据库服务；
+    2. 通达信页面需跳转到任意一只个股，并设置周期是【月K】（否则无法拿到尽可能多的指标数据）。
     """
     print_locals()
 
     CONSOLE = _ctx.obj['console'] # type: Console
     CFG = _ctx.obj['cfg']  # type: dict
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     if not stocks:
         CONSOLE.print("⚠️ 股票列表为空，请使用 -s/--stock （或在 memory-cache 命令中缓存）指定。")
@@ -2312,8 +2316,10 @@ def formula(
             CONSOLE.print(f"trading_dates = ", end='')
             CONSOLE.print(Pretty(trading_dates, max_length=max_to_show))
 
-        code_2_value = {}
-        code_2_df = {}
+        # --save-db 且非管道/非 verbose 时不累加全量内存（边跑边存已落盘每只个股）
+        _should_accumulate = not (is_save_db and _is_zb and not verbose and not _is_pipe_producer)
+        code_2_value = {} if (_should_accumulate and (_is_xg or _is_exp)) else None
+        code_2_df = {} if (_should_accumulate and _is_zb) else None
 
         # ── 阶段3: 逐股票调用 ──
         formula_arg = ','.join(args)
@@ -2383,7 +2389,8 @@ def formula(
                                 return
                         value_of_res = included
 
-                    code_2_value[full_code] = value_of_res
+                    if code_2_value is not None:
+                        code_2_value[full_code] = value_of_res
 
             # 构建每股票 DataFrame（所有类型统一处理）
             if value_of_res:
@@ -2417,7 +2424,8 @@ def formula(
                                         title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（已过滤空值）",
                                         table_max_rows=max_to_show, printer=CONSOLE.print)
 
-                code_2_df[full_code] = df_cleaned if not df_cleaned.empty else df
+                if code_2_df is not None:
+                    code_2_df[full_code] = df_cleaned if not df_cleaned.empty else df
 
                 # ── 准备下一轮：跳转下一页 → 落盘当前 → 补足 sleep ──
                 if stock_idx + 1 < len(stocks):
@@ -2445,14 +2453,17 @@ def formula(
                             dividend_type, _db_url, replace=is_replace, console=CONSOLE)
 
         # ── 阶段4: 结果输出（类型分发） ──
-        if verbose:
+        if verbose and code_2_value is not None:
             CONSOLE.print(f"code_2_value = {code_2_value}")
 
         if _is_zb:
-            formula_key = f"{name}|{','.join(args)}" if args else name
-            return {'dfs': code_2_df, 'period': period,
-                    'formula_key': formula_key, 'dividend_type': dividend_type,
-                    '_source': 'stock_metrics'}
+            if code_2_df is not None:
+                formula_key = f"{name}|{','.join(args)}" if args else name
+                return {'dfs': code_2_df, 'period': period,
+                        'formula_key': formula_key, 'dividend_type': dividend_type,
+                        '_source': 'stock_metrics'}
+            # --save-db 边跑边存模式：无需返回巨量数据
+            return
 
         # xg / exp 使用聚合输出
         if _is_xg:
@@ -2982,7 +2993,6 @@ def print_pipe(_ctx: click.Context,
         CONSOLE.print(Pretty(_blocks, max_length=max_to_show) if len(_blocks) > max_to_show else list(_blocks))
 
 
-
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--block', '-b', 'blocks', multiple=True, callback=split_comma_stocks, required=True, help='通达信板块代码列表 (如: 880672.SH，可带半角逗号分隔)')
 @click.pass_context
@@ -2994,5 +3004,81 @@ def blocks_2_stocks(_ctx: click.Context,
 
     try:
         return {'stocks': blocks}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
+@click.option('--file', '-f', 'file_path', type=click.Path(exists=True, dir_okay=False, readable=True), required=True, help='包含股票代码的文件路径（每行一个股票代码）')
+@click.option('--key', '-k', 'key', default='stocks', show_default=True, help='返回的 key 名称')
+@click.pass_context
+def read_from_file(_ctx: click.Context,
+                   file_path: str,
+                   key: str,
+                   **kwargs):
+    """从文件中读取 stocks 列表（每行一个股票代码）"""
+    CONSOLE = _ctx.obj['console'] # type: Console
+
+    try:
+        stocks = []
+        df = None
+        # 支持从 .parquet 文件中导入 df
+        if file_path.endswith('.parquet'):
+            import pandas as pd
+            df = pd.read_parquet(file_path)
+            if not df.empty:
+                # 尝试取第一列作为股票代码
+                first_col = df.columns[0]
+                stocks = [str(code).strip() for code in df[first_col] if str(code).strip()]
+                df = df[df[first_col].isin(stocks)]  # 过滤掉空值或无效股票代码的行
+            else:
+                CONSOLE.print(f"[yellow]⚠️ Parquet 文件 {file_path} 中未找到有效的股票代码[/yellow]")
+                return
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            # 根据后缀名判断用哪种方式解析文件
+            if file_path.endswith('.csv'):
+                import csv
+                reader = csv.reader(f)
+                stocks = [row[0].strip() for row in reader if row and row[0].strip()]
+            elif file_path.endswith('.json'):
+                import json
+                data = json.load(f)
+                if isinstance(data, list):
+                    stocks = [str(item).strip() for item in data if str(item).strip()]
+                elif isinstance(data, dict):
+                    # 如果是字典，尝试取 key 为 'stocks' 或 'data' 的值
+                    if 'stocks' in data and isinstance(data['stocks'], list):
+                        stocks = [str(item).strip() for item in data['stocks'] if str(item).strip()]
+                    elif 'data' in data and isinstance(data['data'], list):
+                        stocks = [str(item).strip() for item in data['data'] if str(item).strip()]
+                    else:
+                        CONSOLE.print(f"[yellow]⚠️ JSON 文件 {file_path} 中未找到有效的股票代码列表[/yellow]")
+                        return
+                else:
+                    CONSOLE.print(f"[yellow]⚠️ JSON 文件 {file_path} 格式不支持[/yellow]")
+                    return
+            elif file_path.endswith('.xlsx') or file_path.endswith('.xls'):
+                import pandas as pd
+                df = pd.read_excel(f)
+                if not df.empty:
+                    # 尝试取第一列作为股票代码
+                    first_col = df.columns[0]
+                    stocks = [str(code).strip() for code in df[first_col] if str(code).strip()]
+                else:
+                    CONSOLE.print(f"[yellow]⚠️ Excel 文件 {file_path} 中未找到有效的股票代码[/yellow]")
+                    return
+            elif file_path.endswith('.txt'):
+                stocks = [line.strip() for line in f if line.strip()]
+
+        if not stocks:
+            CONSOLE.print(f"[yellow]⚠️ 文件 {file_path} 中未找到有效的股票代码[/yellow]")
+            return
+        CONSOLE.print(f"从文件 {file_path} 读取到 [bold]{len(stocks)}[/bold] 个股票代码")
+
+        if df is not None:
+            return {key: stocks, 'df': df}
+        return {key: stocks}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
