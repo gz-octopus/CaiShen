@@ -555,7 +555,7 @@ def get_market_data(_ctx: click.Context,
                     fill_data: bool,
                     verbose: bool,
                     is_save_db: bool,
-                    is_save_df: bool,
+                    cache_df: bool,
                     **kwargs, # 这样一来，就不用手动添加 df_collector 的变量了。
 ):
     """获取K线数据"""
@@ -595,7 +595,7 @@ def get_market_data(_ctx: click.Context,
 
             for code, stock_df in stock_2_df.items():
 
-                if not is_save_df:
+                if not cache_df:
                     # 保存到 df 中，就不打印了
                     print_dataframe(stock_df, title=f"股票数据 {code} （{period}）K线数据",
                                     show_footer=True, printer=CONSOLE.print)
@@ -2584,7 +2584,7 @@ def formula_multi(
     is_save_db: bool,
     cache_stocks: bool,
     stock_group_index: int,
-    is_save_df: bool,
+    cache_df: bool,
     **kwargs,
 ):
     """批量通达信选股公式"""
@@ -2763,7 +2763,7 @@ def formula_multi(
                             {stock_code: stock_df}, formula_key, period,
                             dividend_type, db_url, console=CONSOLE)
 
-                if is_save_df:
+                if cache_df:
                     formula_key = f"{name}|{','.join(args)}" if args else name
                     return {'dfs': stock_dfs, 'period': period,
                             'formula_key': formula_key, 'dividend_type': dividend_type,

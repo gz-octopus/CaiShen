@@ -720,10 +720,10 @@ def blocks_collector(
     return decorator(func) if func else decorator
 
 
-def df_collector(func=None, *, save_memory_param='is_save_df'):
+def df_collector(func=None, *, save_memory_param='cache_df'):
     """处理 DataFrame 合并与清洗
     注意：
- * 被装饰函数请手动添加上 is_save_df: bool 参数
+ * 被装饰函数请手动添加上 cache_df: bool 参数
  * 被装饰函数返回一个 dict:
     {
         'df': <DataFrame>,
@@ -764,7 +764,8 @@ def df_collector(func=None, *, save_memory_param='is_save_df'):
             return result
 
         # 动态添加两个参数
-        f = click.option('--save-df', '-sdf', save_memory_param, is_flag=True,
+        long_param, short_param = _generate_long_short_param(save_memory_param)
+        f = click.option(long_param, short_param, save_memory_param, is_flag=True,
                          help='缓存 DateFrame 或 stock -> DataFrame')(f)
         f = click.option('--prefix', '-df-p', 'prefix', help='添加到 DataFrame 时所有列都带如的前缀')(f)
 
