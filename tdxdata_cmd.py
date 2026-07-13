@@ -1610,7 +1610,7 @@ def get_stocks(_ctx: click.Context,
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
               default=STOCKS, required=False, help='股票代码列表 (如: 603358.SH)。管道模式下可从上游自动获取')
 @click.option('--date', '-d', 'date', type=DATETIME, default=None,
-              help='日期（默认：最近一个交易日 15:00 为界）')
+              help='日期（默认：最近一个交易日，9:30 之前算前一个交易日）')
 @click.option('--block-type', '-t', 'block_types', multiple=True, default=['概念'],
               type=click.Choice(['概念', '行业', '地域', '风格', '自定义']),
               help='板块类型')
@@ -1646,7 +1646,7 @@ def stock_block_stat(_ctx: click.Context,
     # 确定交易日期
     if date is None:
         now_dt = datetime.now()
-        trading_date = calc_belong_trading_day(now_dt, datetime_time(hour=15))
+        trading_date = calc_belong_trading_day(now_dt, datetime_time(hour=9, minute=30))  # 9:30 之前算前一个交易日
     else:
         trading_date = date
 
@@ -1765,8 +1765,10 @@ def stock_block_stat(_ctx: click.Context,
                 '板块成分股数量': block_2_infos.get(block_code, {}).get('GPNume', 0),
                 '个股数': len(stocks_in_block),
                 '均涨幅%': avg_change,
-                '涨/涨停': f"{block_snapshot.get('UpHome', 0)}|{block_snapshot.get('Outside', 0)}",
-                '跌/跌停': f"{block_snapshot.get('DownHome', 0)}|{block_snapshot.get('Inside', 0)}",
+                '涨(家)': block_snapshot.get('UpHome', 0),
+                '涨停': block_snapshot.get('Outside', 0),
+                '跌(家)': block_snapshot.get('DownHome', 0),
+                '跌停': block_snapshot.get('Inside', 0),
                 '换手率%': float(block_more_info.get('fHSL', '0')),
                 '量比': float(block_more_info.get('fLianB', '0')),
                 '主买净额(亿)': float(block_more_info.get('Zjl', '0')) / 10000,
@@ -1782,7 +1784,9 @@ def stock_block_stat(_ctx: click.Context,
                       f"涉及板块: [yellow]{len(block_2_infos.keys())}[/yellow] 个")
         print_dataframe(df_stats.head(max_to_show),
                         title=f"板块聚合（按个股数降序，前 {min(max_to_show, len(df_stats))} 条）",
-                        show_footer=True, printer=CONSOLE.print)
+                        show_footer=True, printer=CONSOLE.print,
+                        sum_cols=['个股数', '涨(家)', '涨停', '跌(家)', '跌停', '主买净额(亿)', '主力净额(亿)'],
+                        avg_cols=['均涨幅%', '换手率%', '量比'])
 
         if is_verbose:
             df_detail = pd.DataFrame(stock_details)
@@ -1792,6 +1796,266 @@ def stock_block_stat(_ctx: click.Context,
         # ── 管道返回 ──
         if cache_blocks or _is_pipe_producer:
             return {'blocks': list(block_2_infos.keys())}
+
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+# ---------------------------------------------------------------------------------------------
+# 个股持仓盈亏统计
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
+              default=STOCKS, required=False, help='股票代码列表。管道模式下可从上游自动获取')
+@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+              help='买入日期（默认：最近一个交易日 15:00 为界）')
+@click.option('--end-time', '-et', 'end_time', type=DATETIME, default=None,
+              help='结束统计日期（默认：今天）')
+@click.option('--daily', '-dl', 'daily', is_flag=True,
+              help='逐日输出模式：从买入日起每一天输出一个持仓盈亏 DataFrame')
+@click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的逐日 K 线明细）')
+@click.option('--top', '-top', 'top_n', type=int, default=0, show_default=True,
+              help='仅显示涨/跌幅前 N 名（0 表示全部）')
+@click.option('--max-to-show', '-max', 'max_to_show', default=30, show_default=True, type=int,
+              help='每张表最多显示多少条记录')
+@click.pass_context
+def stock_stat(_ctx: click.Context,
+    stocks: list[str],
+    date: datetime | None,
+    end_time: datetime | None,
+    daily: bool,
+    is_verbose: bool,
+    top_n: int,
+    max_to_show: int,
+    cache_stocks: bool,
+    stock_group_index: int,
+):
+    """统计个股从某日收盘买入后的持仓盈亏表现
+
+    以 --date 当日收盘价为买入成本，计算持有期内每天：
+    - 收盘盈亏（涨幅%）：(当日收盘 - 买入成本) / 买入成本 × 100
+    - 最高盈亏（涨幅%）：(当日最高 - 买入成本) / 买入成本 × 100
+    - 最低盈亏（跌幅%）：(当日最低 - 买入成本) / 买入成本 × 100
+
+    返回 {'stocks': 股票集合} 供管道下游使用。
+
+    使用示例：
+        ss -s 603358.SH -d 2026-06-01 -dl              # 每日持仓盈亏表
+        gs -m 50 | ss -d 2026-07-01 -top 10            # 全A股7月1日买入，前10名
+        ss -s 603358.SH -d 2026-06-01 -v               # 逐 K 线明细
+    """
+    CONSOLE = _ctx.obj['console']  # type: Console
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
+
+    # 确定日期范围
+    if date is None:
+        now_dt = datetime.now()
+        entry_date = calc_belong_trading_day(now_dt, datetime_time(hour=15))
+    else:
+        entry_date = date
+    if end_time is None:
+        end_date = datetime.now()
+    else:
+        end_date = end_time
+
+    entry_date_str = entry_date.strftime('%Y%m%d')
+    end_date_str = end_date.strftime('%Y%m%d')
+
+    print_locals()
+
+    try:
+        stocks_list = list(stocks)
+        if not stocks_list:
+            CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
+            return
+
+        mode_label = "逐日持仓" if daily else "持仓盈亏"
+        CONSOLE.print(f"\n[bold]📈 {mode_label}统计[/bold] — "
+                      f"买入: [yellow]{entry_date_str}[/yellow]，"
+                      f"截止: [yellow]{end_date_str}[/yellow]，"
+                      f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
+
+        from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
+
+        # ── Step 1: 批量获取 K 线 ──
+        progress_print(f"[bold]STEP 1/{'3' if daily else '2'}[/bold] 获取 {len(stocks_list)} 只个股的 K 线数据...")
+        dict_df = tq.get_market_data(
+            field_list=['Close', 'High', 'Low'],
+            stock_list=stocks_list,
+            start_time=entry_date.strftime('%Y%m%d%H%M%S'),
+            end_time=end_date.strftime('%Y%m%d%H%M%S'),
+            count=-1,
+            dividend_type='front',
+            period='1d',
+            fill_data=False,
+        )
+        stock_2_df = transform_field_to_stock_fast(dict_df)  # field-first → stock-first
+
+        # ── 收集所有交易日（取各股索引并集）──
+        all_trading_days = set()
+        for df in stock_2_df.values():
+            if df is not None and not df.empty:
+                all_trading_days.update(df.index)
+        trading_days = sorted(all_trading_days)
+        entry_ts = pd.Timestamp(entry_date)
+        trading_days = [d for d in trading_days if d >= entry_ts]
+
+        if not trading_days:
+            CONSOLE.print("[yellow]买入日后无交易数据[/yellow]")
+            return
+
+        # ── Step 2: 预计算每只股票的买入成本和逐日累计盈亏 ──
+        progress_print(f"[bold]STEP 2/{'3' if daily else '2'}[/bold] 计算持仓盈亏...")
+        # stock_pnl[full_code] = {'entry_close': float, 'daily': list of {date, close, close_pnl, high_pnl, low_pnl}}
+        stock_pnl = {}
+        all_passed = set()
+
+        for _, stock_code in enumerate_with_progress(stocks_list, task_name="计算盈亏"):
+            code = SecurityCode(stock_code)
+            full_code = code.full_code
+
+            df = stock_2_df.get(full_code)
+            if df is None or df.empty:
+                continue
+
+            entry_mask = df.index >= entry_ts
+            if not entry_mask.any():
+                continue
+            entry_idx = df.index[entry_mask][0]
+            entry_close = float(df.loc[entry_idx, 'Close'])
+            if entry_close == 0:
+                continue
+
+            post_entry = df.loc[df.index >= entry_idx]
+            if post_entry.empty:
+                continue
+
+            # 逐日累计盈亏
+            daily_list = []
+            for day_idx, row in post_entry.iterrows():
+                daily_list.append({
+                    'date': day_idx,
+                    'close': float(row['Close']),
+                    'close_pnl': round((float(row['Close']) - entry_close) / entry_close * 100, 2),
+                    'high_pnl': round((float(row['High']) - entry_close) / entry_close * 100, 2),
+                    'low_pnl': round((float(row['Low']) - entry_close) / entry_close * 100, 2),
+                })
+            stock_pnl[full_code] = {
+                'entry_close': entry_close,
+                'entry_date': entry_idx,
+                'daily': daily_list,
+            }
+            all_passed.add(full_code)
+
+        if not stock_pnl:
+            CONSOLE.print("[yellow]无有效数据[/yellow]")
+            return
+
+        # ── Step 3a: 逐日输出模式 ──
+        if daily:
+            progress_print(f"[bold]STEP 3/3[/bold] 逐日输出持仓表（共 {len(trading_days)} 个交易日）...")
+            for _, day in enumerate_with_progress(trading_days, task_name="逐日输出"):
+                day_rows = []
+                for full_code, info in stock_pnl.items():
+                    pnl_list = info['daily']
+                    # 找到 <= day 的最新一条
+                    day_data = None
+                    for d in reversed(pnl_list):
+                        if d['date'] <= day:
+                            day_data = d
+                            break
+                    if day_data is None:
+                        continue
+                    sc = SecurityCode(full_code)
+                    day_rows.append({
+                        '代码': sc.short_code,
+                        '名称': get_stock_name(full_code, ''),
+                        '收盘': day_data['close'],
+                        '收盘盈亏%': day_data['close_pnl'],
+                        '最高盈亏%': day_data['high_pnl'],
+                        '最低盈亏%': day_data['low_pnl'],
+                    })
+
+                if not day_rows:
+                    continue
+
+                df_day = pd.DataFrame(day_rows).sort_values('收盘盈亏%', ascending=False).reset_index(drop=True)
+                if top_n > 0:
+                    half = top_n // 2 if top_n > 1 else 1
+                    df_day = pd.concat([df_day.head(half), df_day.tail(top_n - half)]).drop_duplicates()
+                else:
+                    df_day = df_day.head(max_to_show)
+
+                day_str = day.strftime('%Y%m%d') if hasattr(day, 'strftime') else str(day)[:10]
+                print_dataframe(df_day,
+                                title=f"📅 {day_str} 持仓盈亏（{len(df_day)} 只，显示前 {min(max_to_show, len(df_day))} 条）",
+                                avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
+                                show_footer=True, printer=CONSOLE.print)
+        else:
+            # ── Step 3b: 最终汇总模式 ──
+            stock_results = []
+            for full_code, info in stock_pnl.items():
+                pnl_list = info['daily']
+                if not pnl_list:
+                    continue
+                sc = SecurityCode(full_code)
+                first = pnl_list[0]
+                latest = pnl_list[-1]
+                max_high = max(d['high_pnl'] for d in pnl_list)
+                min_low = min(d['low_pnl'] for d in pnl_list)
+                high_day = next(d for d in pnl_list if d['high_pnl'] == max_high)
+                low_day = next(d for d in pnl_list if d['low_pnl'] == min_low)
+                stock_results.append({
+                    '代码': sc.short_code,
+                    '名称': get_stock_name(full_code, ''),
+                    '买入日': first['date'].strftime('%Y%m%d') if hasattr(first['date'], 'strftime') else str(first['date']),
+                    '买入价': round(info['entry_close'], 2),
+                    '最新收盘': latest['close'],
+                    '收盘盈亏%': latest['close_pnl'],
+                    '最高盈亏%': max_high,
+                    '最高日': high_day['date'].strftime('%Y%m%d') if hasattr(high_day['date'], 'strftime') else str(high_day['date']),
+                    '最低盈亏%': min_low,
+                    '最低日': low_day['date'].strftime('%Y%m%d') if hasattr(low_day['date'], 'strftime') else str(low_day['date']),
+                    '持有天数': len(pnl_list),
+                })
+
+            if not stock_results:
+                CONSOLE.print("[yellow]无有效数据[/yellow]")
+                return
+
+            df_summary = pd.DataFrame(stock_results).sort_values('收盘盈亏%', ascending=False).reset_index(drop=True)
+
+            if top_n > 0:
+                half = top_n // 2 if top_n > 1 else 1
+                df_show = pd.concat([df_summary.head(half), df_summary.tail(top_n - half)]).drop_duplicates()
+            else:
+                df_show = df_summary.head(max_to_show)
+
+            CONSOLE.print(f"\n统计完成: [green]{len(stock_results)}[/green] / {len(stocks_list)} 只")
+            print_dataframe(df_show,
+                            title=f"持仓盈亏（买入日 {entry_date_str}，截止 {end_date_str}，"
+                                  f"共 {len(df_summary)} 只，显示前 {min(max_to_show, len(df_show))} 条）",
+                            sum_cols=['持有天数'],
+                            avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
+                            show_footer=True, printer=CONSOLE.print)
+
+        # ── verbose: 逐 K 线明细 ──
+        if is_verbose:
+            for full_code, info in stock_pnl.items():
+                pnl_list = info['daily']
+                if not pnl_list:
+                    continue
+                sc = SecurityCode(full_code)
+                df_detail = pd.DataFrame(pnl_list).set_index('date')
+                df_detail = df_detail.rename(columns={'close_pnl': '收盘盈利%', 'high_pnl': '最高盈利%', 'low_pnl': '最低盈利%'})
+                daily_cols = ['close', '收盘盈利%', '最高盈利%', '最低盈利%']
+                print_dataframe(df_detail[daily_cols].head(max_to_show),
+                                title=f"{sc.short_code} {get_stock_name(full_code, '')} 逐日明细（前 {min(max_to_show, len(pnl_list))} 天）",
+                                show_footer=True, printer=CONSOLE.print)
+
+        # ── 管道返回 ──
+        if cache_stocks or _is_pipe_producer:
+            return {'stocks': all_passed}
 
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
