@@ -1797,6 +1797,193 @@ def stock_block_stat(_ctx: click.Context,
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
 
 
+# ---------------------------------------------------------------------------------------------
+# 主力资金流筛选
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
+              default=STOCKS, required=False, help='股票代码列表。管道模式下可从上游自动获取')
+@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+              help='日期（默认：最近一个交易日 15:00 为界）')
+@click.option('--zjl-min', '-zmin', 'zjl_min', type=float, default=None,
+              help='主买净额(万元) 最小值（含）')
+@click.option('--zjl-max', '-zmax', 'zjl_max', type=float, default=None,
+              help='主买净额(万元) 最大值（含）')
+@click.option('--zjl-hb-min', '-hmin', 'zjl_hb_min', type=float, default=None,
+              help='主力净流入(万元) 最小值（含）')
+@click.option('--zjl-hb-max', '-hmax', 'zjl_hb_max', type=float, default=None,
+              help='主力净流入(万元) 最大值（含）')
+@click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的资金数据）')
+@click.option('--max-to-show', '-max', 'max_to_show', default=30, show_default=True, type=int,
+              help='最多显示多少条结果')
+@click.pass_context
+def filter_capital_flow(_ctx: click.Context,
+    stocks: list[str],
+    date: datetime | None,
+    zjl_min: float | None,
+    zjl_max: float | None,
+    zjl_hb_min: float | None,
+    zjl_hb_max: float | None,
+    is_verbose: bool,
+    max_to_show: int,
+    cache_stocks: bool,
+    stock_group_index: int,
+):
+    """按主力资金流向筛选个股
+
+    数据来源（根据 --date 自动选择）：
+    - 当日 / 最近交易日：通过 get_more_info 实时获取 Zjl / Zjl_HB
+    - 历史日期：从 stock_metrics 表查询 L2_DATA 指标（需先运行过 formula -t zb -n L2_DATA --save-db）
+
+    返回 {'stocks': 符合条件的股票集合} 供管道下游使用。
+
+    使用示例：
+        fcf -s 603358.SH -s 600000.SH -zmin 1000            # 主买净额 ≥ 1000万
+        fcf -zmin 500 -hmin 1000 -zmax 5000                 # 双条件范围筛选
+        gs -m 50 | fcf -zmin 1000 -v                        # 管道：全A股 → 资金流筛选
+    """
+    CONSOLE = _ctx.obj['console']  # type: Console
+    CFG = _ctx.obj['cfg']  # type: dict
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
+
+    # 确定交易日期 & 判断数据来源
+    if date is None:
+        now_dt = datetime.now()
+        trading_date = calc_belong_trading_day(now_dt, datetime_time(hour=15))
+    else:
+        trading_date = date
+
+    trading_date_str = trading_date.strftime('%Y%m%d')
+    today_str = datetime.now().strftime('%Y%m%d')
+
+    # 是否为实时日期（当日或最近交易日 ≈ 当前）
+    is_realtime = (trading_date_str == today_str)
+
+    print_locals()
+
+    try:
+        stocks_list = list(stocks)
+        if not stocks_list:
+            CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
+            return
+
+        CONSOLE.print(f"\n[bold]💰 主力资金流筛选[/bold] — 日期: [yellow]{trading_date_str}[/yellow]"
+                      f"{' (实时)' if is_realtime else ' (历史 DB)'}，"
+                      f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
+
+        from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
+
+        passed_stocks = set()
+        stock_details = []  # 用于 verbose 打印
+
+        if is_realtime:
+            # ── 实时路径：get_more_info ──
+            progress_print(f"[bold]实时获取[/bold] {len(stocks_list)} 只个股的资金流数据...")
+            for _, stock_code in enumerate_with_progress(stocks_list, task_name="获取主力资金数据"):
+                code = SecurityCode(stock_code)
+                full_code = code.full_code
+
+                info = tq.get_more_info(stock_code=full_code, field_list=['Zjl', 'Zjl_HB'])
+                if not info or not isinstance(info, dict):
+                    continue
+
+                zjl_val = _safe_float(info.get('Zjl', '0'))
+                zjl_hb_val = _safe_float(info.get('Zjl_HB', '0'))
+
+                if _match_filters(zjl_val, zjl_min, zjl_max) and \
+                   _match_filters(zjl_hb_val, zjl_hb_min, zjl_hb_max):
+                    passed_stocks.add(full_code)
+
+                if is_verbose:
+                    stock_details.append({
+                        '股票代码': code.short_code,
+                        '股票名称': get_stock_name(full_code, ''),
+                        '主买净额(万)': zjl_val,
+                        '主力净额(万)': zjl_hb_val,
+                        '符合条件': full_code in passed_stocks,
+                    })
+        else:
+            # ── 历史路径：stock_metrics DB ──
+            progress_print(f"[bold]历史查询[/bold] {len(stocks_list)} 只个股在 {trading_date_str} 的 L2_DATA...")
+            db_url = _assemble_db_url(DB_TYPE, CFG)
+            StockMetrics.init_db(db_url)
+
+            for _, stock_code in enumerate_with_progress(stocks_list, task_name="查询 L2_DATA"):
+                code = SecurityCode(stock_code)
+                full_code = code.full_code
+
+                # 查询主买净额
+                rows_zjl = StockMetrics.query(
+                    db_url, full_code, '1d',
+                    trading_date_str, trading_date_str,
+                    dividend_type=1,
+                    formula_key='L2_DATA', indicator_key='主买净额')
+                # 查询主力净额
+                rows_hb = StockMetrics.query(
+                    db_url, full_code, '1d',
+                    trading_date_str, trading_date_str,
+                    dividend_type=1,
+                    formula_key='L2_DATA', indicator_key='主力净额')
+
+                zjl_val = _safe_float(rows_zjl[0]['value']) if rows_zjl else 0.0
+                zjl_hb_val = _safe_float(rows_hb[0]['value']) if rows_hb else 0.0
+
+                if _match_filters(zjl_val, zjl_min, zjl_max) and \
+                   _match_filters(zjl_hb_val, zjl_hb_min, zjl_hb_max):
+                    passed_stocks.add(full_code)
+
+                if is_verbose:
+                    stock_details.append({
+                        '股票代码': code.short_code,
+                        '股票名称': get_stock_name(full_code, ''),
+                        '主买净额(万)': zjl_val,
+                        '主力净额(万)': zjl_hb_val,
+                        '符合条件': full_code in passed_stocks,
+                    })
+
+        # ── 输出结果 ──
+        CONSOLE.print(f"\n筛选结果: [green]{len(passed_stocks)}[/green] / {len(stocks_list)} 只符合条件")
+
+        if is_verbose:
+            df_detail = pd.DataFrame(stock_details)
+            df_sorted = df_detail.sort_values('主买净额(万)', ascending=False)
+            print_dataframe(df_sorted.head(max_to_show),
+                            title=f"个股资金流详情（前 {min(max_to_show, len(df_sorted))} 条）",
+                            show_footer=True, printer=CONSOLE.print)
+
+        # 打印通过筛选的股票列表
+        if passed_stocks:
+            CONSOLE.print(f"符合条件个股: ", end='')
+            stocks_to_show = list(passed_stocks)[:max_to_show]
+            CONSOLE.print(Pretty(stocks_to_show, max_length=max_to_show))
+
+        # ── 管道返回 ──
+        if cache_stocks or _is_pipe_producer:
+            return {'stocks': passed_stocks}
+
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+def _safe_float(val) -> float:
+    """安全转换为 float，处理 None / str / 空字符串"""
+    if val is None or val == '':
+        return 0.0
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _match_filters(value: float, vmin: float | None, vmax: float | None) -> bool:
+    """检查 value 是否在 [vmin, vmax] 范围内（None 表示无限制）"""
+    if vmin is not None and value < vmin:
+        return False
+    if vmax is not None and value > vmax:
+        return False
+    return True
+
+
 # 衍生快捷命令 --------------
 
 # ---------------------------------------------------------------------------------------------
