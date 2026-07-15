@@ -14,12 +14,11 @@
 
 import click
 from tdx_quant.tqcenter import tq
-from datetime import datetime
 from rich import print as pprint
 from rich.console import Console
 from rich.pretty import Pretty
 from rich.style import Style
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import re
 import json
@@ -42,7 +41,7 @@ from difoss_stock_util.tdx_util.tdx_quant_data_dictionary import *
 from difoss_stock_util.time_util import TimeUtils
 from typing import Optional, Dict, List
 from tdx_quant_util import *
-from sqlalchemy import text
+from sqlalchemy import text, create_engine
 from sqlalchemy.orm import Session
 from time import sleep, time
 
@@ -742,13 +741,76 @@ def _save_to_db(df: pd.DataFrame, code: str, table_name: str,
 
 
 # ---------------------------------------------------------------------------------------------
+# 数据库表查询辅助
+def _query_table_stocks(db_url: str, table_name: str, console: Console,
+                        trade_date: str | None = None) -> set:
+    """查询指定表中所有唯一的股票代码（全码格式：603358.SH）
+
+    - stock_metrics / market_data: 利用 (symbol, period, time DESC) 索引
+    - history_data_1d: 由 ExchangeID + InstrumentID 拼接
+    - trade_date: 可选，限定日期（YYYYMMDD），大幅缩小扫描范围
+    """
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            if table_name in ('stock_metrics', 'market_data'):
+                if trade_date:
+                    # 限单日：索引 (symbol, period, time DESC) 配合 time 范围过滤
+                    sql = text(f"""
+                        SELECT DISTINCT symbol FROM {table_name}
+                        WHERE date(TIME) = :trade_date
+                    """)
+                    rows = conn.execute(sql, {'trade_date': trade_date}).fetchall()
+                else:
+                    rows = conn.execute(text(
+                        f"SELECT DISTINCT symbol FROM {table_name}"
+                    )).fetchall()
+                stocks = {str(r[0]) for r in rows}
+            elif table_name == 'history_data_1d':
+                if trade_date:
+                    sql = text("""
+                        SELECT DISTINCT "ExchangeID", "InstrumentID"
+                        FROM history_data_1d
+                        WHERE trade_date = :trade_date
+                        ORDER BY "ExchangeID", "InstrumentID"
+                    """)
+                    rows = conn.execute(sql, {'trade_date': trade_date}).fetchall()
+                else:
+                    rows = conn.execute(text(
+                        'SELECT DISTINCT "ExchangeID", "InstrumentID" FROM history_data_1d ORDER BY "ExchangeID", "InstrumentID"'
+                    )).fetchall()
+                stocks = set()
+                for r in rows:
+                    exc = str(r[0])
+                    ins = str(r[1])
+                    code = SecurityCode(ins + '.' + exc)
+                    stocks.add(code.full_code)
+            else:
+                rows = conn.execute(
+                    text(f"SELECT DISTINCT symbol FROM {table_name}")
+                ).fetchall()
+                stocks = {str(r[0]) for r in rows}
+    except Exception as e:
+        console.print(f"[red]查询 {table_name} 失败: {e}[/red]")
+        return set()
+    console.print(f"📋 [yellow]{table_name}[/yellow] 中共有 [green]{len(stocks)}[/green] 只股票"
+                  + (f"（日期: {trade_date}）" if trade_date else ""))
+    return stocks
+
+
+# ---------------------------------------------------------------------------------------------
 # 数据库保存命令（管道友好）
 @command_with_abbrev(abbrev='db', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
 @click.option('--table', '-t', 'table_name', default=None,
-              help='目标数据库表名（如: history_data_1d / stock_metrics）。'
+              help='目标数据库表名（如: history_data_1d / stock_metrics / market_data）。'
                    '不指定时自动推断：formula 来源 → stock_metrics，其他 → history_data_1d')
 @click.option('--replace', '-r', 'is_replace', is_flag=True,
               help='替换已存在的记录（默认跳过重复键）')
+@click.option('--list-stocks', '-ls', 'list_stocks', is_flag=True,
+              help='列出 -t 指定表中的所有股票代码（而非写入数据），可管道给下游')
+@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+              help='日期（仅 -ls 时生效，过滤指定日期的数据，默认不过滤）')
 @click.option('--db-type', '-db', 'db_type',
               default=None,
               type=click.Choice(ALL_DB_LIST, case_sensitive=False),
@@ -758,7 +820,9 @@ def _save_to_db(df: pd.DataFrame, code: str, table_name: str,
               help='修改全局默认的数据库类型（持久生效于当前 REPL 会话）')
 @click.pass_context
 def db(_ctx: click.Context, table_name: str, is_replace: bool,
-       db_type: str, set_db_type: str):
+       list_stocks: bool, date: datetime | None,
+       db_type: str, set_db_type: str,
+       cache_stocks: bool, stock_group_index: int):
     """将管道传入的数据保存到数据库表（缩写: db）
 
     -t 不指定时自动推断：
@@ -769,11 +833,16 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
         gmd -c 100 -s 600000.SH | db                    # → history_data_1d
         f -t zb -n MACD -s 603337.SH | db               # → stock_metrics
         gmd -c 100 -s 600000.SH | db -t stock_metrics   # 显式覆盖
+        db -t stock_metrics -ls                          # 列出 stock_metrics 中所有股票
+        db -t history_data_1d -ls | fcf -zmin 1000       # 管道：有K线数据的股 → 资金筛选
         db --set-db-type sqlite                          # 修改全局默认数据库类型
     """
+    print_locals()
+    
     global DB_TYPE
     CONSOLE = _ctx.obj['console']  # type: Console
     CFG = _ctx.obj['cfg']  # type: dict
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # ── 处理 --set-db-type ──
     if set_db_type:
@@ -783,6 +852,19 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
     # ── 解析 db_type ──
     if db_type is None:
         db_type = DB_TYPE
+
+    # ── --list-stocks：列出表中所有股票代码 ──
+    if list_stocks:
+        if not table_name:
+            CONSOLE.print("[red]-ls 必须配合 -t 指定表名[/red]")
+            return
+        trading_date = calc_belong_trading_day(date + timedelta(seconds=1), dividing_line=datetime_time(0, 0, 0))
+        trading_date_str = trading_date.strftime('%Y%m%d')
+        db_url = _assemble_db_url(db_type, CFG)
+        stocks = _query_table_stocks(db_url, table_name, CONSOLE, trading_date_str)
+        if cache_stocks or _is_pipe_producer:
+            return {'stocks': stocks}
+        return
 
     # 纯 --set-db-type 操作（无管道数据 + 无数据需保存），仅修改全局变量后返回
     pipe_data = _ctx.obj.get('_pipe_data', {})
@@ -2069,26 +2151,28 @@ def stock_stat(_ctx: click.Context,
               default=STOCKS, required=False, help='股票代码列表。管道模式下可从上游自动获取')
 @click.option('--date', '-d', 'date', type=DATETIME, default=None,
               help='日期（默认：最近一个交易日 15:00 为界）')
-@click.option('--zjl-min', '-zmin', 'zjl_min', type=float, default=None,
+@click.option('--zm-min', '-zm-min', 'zm_min', type=float, default=None,
               help='主买净额(万元) 最小值（含）')
-@click.option('--zjl-max', '-zmax', 'zjl_max', type=float, default=None,
+@click.option('--zm-max', '-zm-max', 'zm_max', type=float, default=None,
               help='主买净额(万元) 最大值（含）')
-@click.option('--zjl-hb-min', '-hmin', 'zjl_hb_min', type=float, default=None,
+@click.option('--zl-min', '-zl-min', 'zl_min', type=float, default=None,
               help='主力净流入(万元) 最小值（含）')
-@click.option('--zjl-hb-max', '-hmax', 'zjl_hb_max', type=float, default=None,
+@click.option('--zl-max', '-zl-max', 'zl_max', type=float, default=None,
               help='主力净流入(万元) 最大值（含）')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的资金数据）')
+@click.option('--with-name', '-wn', 'is_with_name', is_flag=True, help='股票代码带上股票名称（如 603358|华达科技）')
 @click.option('--max-to-show', '-max', 'max_to_show', default=30, show_default=True, type=int,
               help='最多显示多少条结果')
 @click.pass_context
 def filter_capital_flow(_ctx: click.Context,
     stocks: list[str],
     date: datetime | None,
-    zjl_min: float | None,
-    zjl_max: float | None,
-    zjl_hb_min: float | None,
-    zjl_hb_max: float | None,
+    zm_min: float | None,
+    zm_max: float | None,
+    zl_min: float | None,
+    zl_max: float | None,
     is_verbose: bool,
+    is_with_name: bool,
     max_to_show: int,
     cache_stocks: bool,
     stock_group_index: int,
@@ -2154,8 +2238,8 @@ def filter_capital_flow(_ctx: click.Context,
                 zjl_val = _safe_float(info.get('Zjl', '0'))
                 zjl_hb_val = _safe_float(info.get('Zjl_HB', '0'))
 
-                if _match_filters(zjl_val, zjl_min, zjl_max) and \
-                   _match_filters(zjl_hb_val, zjl_hb_min, zjl_hb_max):
+                if _match_filters(zjl_val, zm_min, zm_max) and \
+                   _match_filters(zjl_hb_val, zl_min, zl_max):
                     passed_stocks.add(full_code)
 
                 if is_verbose:
@@ -2192,8 +2276,8 @@ def filter_capital_flow(_ctx: click.Context,
                 zjl_val = _safe_float(rows_zjl[0]['value']) if rows_zjl else 0.0
                 zjl_hb_val = _safe_float(rows_hb[0]['value']) if rows_hb else 0.0
 
-                if _match_filters(zjl_val, zjl_min, zjl_max) and \
-                   _match_filters(zjl_hb_val, zjl_hb_min, zjl_hb_max):
+                if _match_filters(zjl_val, zm_min, zm_max) and \
+                   _match_filters(zjl_hb_val, zl_min, zl_max):
                     passed_stocks.add(full_code)
 
                 if is_verbose:
@@ -2218,7 +2302,10 @@ def filter_capital_flow(_ctx: click.Context,
         # 打印通过筛选的股票列表
         if passed_stocks:
             CONSOLE.print(f"符合条件个股: ", end='')
-            stocks_to_show = list(passed_stocks)[:max_to_show]
+            if is_with_name:
+                stocks_to_show = [f"{sc}|{get_stock_name(sc)}" for sc in list(passed_stocks)[:max_to_show]]
+            else:
+                stocks_to_show = list(passed_stocks)[:max_to_show]
             CONSOLE.print(Pretty(stocks_to_show, max_length=max_to_show))
 
         # ── 管道返回 ──
@@ -2491,6 +2578,39 @@ def user_sector(
 
             CONSOLE.print(f"已将 {len(stocks)} 只个股添加到自定义板块【代码：{code} 名称：{name}】中")
 
+        elif action == 'create':
+            if not name:
+                E("创建自定义板块需要指定 --name 参数")
+                return
+            if not abbrev:
+                abbrev = convert_block_name_2_code(name)
+                I(自动生成板块简称=abbrev)
+
+            is_new = False
+            existing_code = None
+            if abbrev in sectors_code2name:
+                W(f"板块简称 [yellow]{abbrev}[/yellow] 已存在（{sectors_code2name[abbrev]}）")
+                existing_code = abbrev
+            elif name in sectors_name2code:
+                W(f"板块名称 [yellow]{name}[/yellow] 已存在（简称：{sectors_name2code[name]}）")
+                existing_code = sectors_name2code[name]
+            else:
+                create_res = tq.create_sector(block_code=abbrev, block_name=name)
+                I(create_res=create_res)
+                CONSOLE.print(f"✅ 已创建自定义板块【简称：{abbrev} 名称：{name}】")
+                is_new = True
+                existing_code = abbrev
+
+            if stocks and existing_code:
+                if is_new:
+                    tq.send_user_block(block_code=existing_code, stock_list=stocks, show=show_on_tdx)
+                    CONSOLE.print(f"   已添加 {len(stocks)} 只个股到新板块")
+                else:
+                    label = sectors_code2name.get(existing_code, existing_code)
+                    if click.confirm(f"是否将 {len(stocks)} 只个股追加到已有板块【{label}】？", default=True):
+                        tq.send_user_block(block_code=existing_code, stock_list=stocks, show=show_on_tdx)
+                        CONSOLE.print(f"   已添加 {len(stocks)} 只个股到该板块")
+
         elif action == 'remove' or action == 'remove-st':
             if abbrev:
                 code = abbrev
@@ -2664,7 +2784,8 @@ def get_trading_dates(
               help='需要从输出中包含的指标列名（可多选）')
 @click.option('--field-regex-inclusion', '-fri', 'field_regex_inclusions', multiple=True, callback=split_comma,
               help='需要从输出中包含的指标列名的正则表达式（可多选）')
-@click.option('--jump-tdx', '-j', 'jump_tdx', is_flag=True, help='跳转通达信界面（以获得L2指标数据）')
+@click.option('--jump-tdx', '-j', 'jump_tdx', type=float, default=None,
+              help='跳转通达信界面并等待指定秒数（以获得L2指标数据），不指定时不跳转')
 @click.option('--save-db/--no-save-db', '-sdb', 'is_save_db', is_flag=True,
               help='每获取完一只股票立即入库（边跑边存），无需通过 | db 管道')
 @click.option('--replace', '-r', 'is_replace', is_flag=True,
@@ -2689,7 +2810,7 @@ def formula(
     field_regex_exclusions: list[str],
     field_inclusions: list[str],
     field_regex_inclusions: list[str],
-    jump_tdx: bool,
+    jump_tdx: float | None,
     is_save_db: bool,
     is_replace: bool,
     is_with_name: bool,
@@ -2784,9 +2905,9 @@ def formula(
         for stock_idx, full_code in enumerate(stocks):
             # NOTICE: 通达信缺陷：L2 数据需要软件先跳转（触发界面拉取后）才能获取，不然全是 0 值
             # 跳转逻辑：首只在循环内跳转，后续在上一轮末尾已提前跳转
-            if jump_tdx and stock_idx == 0:
+            if jump_tdx is not None and stock_idx == 0:
                 tq.exec_to_tdx(url=f"http://www.treeid/code_{full_code[:6]}")
-                sleep(2)
+                sleep(jump_tdx)
 
             formula_set_res = tq.formula_set_data_info(stock_code=full_code, stock_period=period,
                                                        count=count, dividend_type=dividend_type)
@@ -2881,7 +3002,7 @@ def formula(
                 # ── 准备下一轮：跳转下一页 → 落盘当前 → 补足 sleep ──
                 if stock_idx + 1 < len(stocks):
                     _t0 = None
-                    if jump_tdx:
+                    if jump_tdx is not None:
                         tq.exec_to_tdx(url=f"http://www.treeid/code_{stocks[stock_idx + 1][:6]}")
                         _t0 = time()
 
@@ -2891,11 +3012,11 @@ def formula(
                             {full_code: df_cleaned}, formula_key, period,
                             dividend_type, _db_url, replace=is_replace, console=CONSOLE)
 
-                    # 若落盘耗时 < 2s，补足剩余等待时间
+                    # 若落盘耗时 < jump_tdx，补足剩余等待时间
                     if _t0 is not None:
                         _elapsed = time() - _t0
-                        if _elapsed < 2:
-                            sleep(2 - _elapsed)
+                        if _elapsed < jump_tdx:
+                            sleep(jump_tdx - _elapsed)
                 else:
                     # 最后一只股票：直接落盘
                     if is_save_db and _is_zb and not df_cleaned.empty:
