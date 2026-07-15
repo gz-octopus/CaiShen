@@ -2008,7 +2008,7 @@ def stock_stat(_ctx: click.Context,
             if entry_close == 0:
                 continue
 
-            post_entry = df.loc[df.index >= entry_idx]
+            post_entry = df.loc[df.index > entry_idx]  # 买入日收盘后，次日开始
             if post_entry.empty:
                 continue
 
@@ -2207,8 +2207,6 @@ def filter_capital_flow(_ctx: click.Context,
     # 是否为实时日期（当日或最近交易日 ≈ 当前）
     is_realtime = (trading_date_str == today_str)
 
-    print_locals()
-
     try:
         stocks_list = list(stocks)
         if not stocks_list:
@@ -2311,6 +2309,116 @@ def filter_capital_flow(_ctx: click.Context,
         # ── 管道返回 ──
         if cache_stocks or _is_pipe_producer:
             return {'stocks': passed_stocks}
+
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+# ---------------------------------------------------------------------------------------------
+# 涨跌停过滤
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
+              default=STOCKS, required=False, help='股票代码列表。管道模式下可从上游自动获取')
+@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+              help='日期（默认：最近一个交易日 9:30 为界）')
+@click.option('--filter-zt/--no-filter-zt', '-zt/-nzt', 'filter_zt', default=True, show_default=True,
+              help='过滤涨停股')
+@click.option('--filter-dt/--no-filter-dt', '-dt/-ndt', 'filter_dt', default=True, show_default=True,
+              help='过滤跌停股')
+@click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式')
+@click.pass_context
+def filter_limit(_ctx: click.Context,
+    stocks: list[str],
+    date: datetime | None,
+    filter_zt: bool,
+    filter_dt: bool,
+    is_verbose: bool,
+    cache_stocks: bool,
+    stock_group_index: int,
+):
+    """过滤涨跌停股票（剔除当日涨停/跌停股）
+
+    使用通达信取整规则精确计算涨跌停价（calc_limit_price），
+    自动识别 主板10% / 科创板20% / 创业板20% / 北交所30%。
+    盘中未收盘时使用当前价格。
+
+    返回 {'stocks': 过滤后剩余的股票集合} 供管道下游使用。
+
+    使用示例：
+        fl -s 603358.SH                             # 过滤涨停+跌停
+        fl --no-filter-dt                           # 仅过滤涨停
+        gs -m 50 | fl -v                            # 全A股过滤涨跌停
+    """
+    CONSOLE = _ctx.obj['console']  # type: Console
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
+
+    if date is None:
+        now_dt = datetime.now()
+        trading_date = calc_belong_trading_day(now_dt, datetime_time(hour=9, minute=30))
+    else:
+        trading_date = date
+
+    trading_date_str = trading_date.strftime('%Y%m%d')
+
+    print_locals()
+
+    try:
+        stocks_list = list(stocks)
+        if not stocks_list:
+            CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
+            return
+
+        CONSOLE.print(f"\n[bold]🚫 涨跌停过滤[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
+                      f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
+
+        # 取近2日 Close 计算涨跌停价
+        dict_df = tq.get_market_data(
+            field_list=['Close'],
+            stock_list=stocks_list,
+            end_time=trading_date.strftime('%Y%m%d%H%M%S'),
+            count=2,
+            dividend_type='front',
+            period='1d',
+            fill_data=False,
+        )
+        stock_2_df = transform_field_to_stock_fast(dict_df)
+
+        from difoss_stock_util.stock_util import calc_limit_price
+        zt_stocks, dt_stocks = set(), set()
+        kept = set()
+
+        for full_code, df in stock_2_df.items():
+            if df is None or df.empty:
+                continue
+            closes = df['Close'].values
+            if len(closes) < 2:
+                continue
+            prev_close = float(closes[-2])
+            today_close = float(closes[-1])
+            if prev_close == 0:
+                continue
+            sc = SecurityCode(full_code)
+
+            if filter_zt and today_close >= calc_limit_price(prev_close, sc.short_code, is_limit_up=True):
+                zt_stocks.add(full_code)
+                continue
+            if filter_dt and today_close <= calc_limit_price(prev_close, sc.short_code, is_limit_up=False):
+                dt_stocks.add(full_code)
+                continue
+            kept.add(full_code)
+
+        CONSOLE.print(f"涨停剔除: [red]{len(zt_stocks)}[/red] 只，"
+                      f"跌停剔除: [green]{len(dt_stocks)}[/green] 只，"
+                      f"保留: [yellow]{len(kept)}[/yellow] 只")
+
+        if is_verbose and zt_stocks:
+            CONSOLE.print(f"涨停股: {list(zt_stocks)[:20]}")
+        if is_verbose and dt_stocks:
+            CONSOLE.print(f"跌停股: {list(dt_stocks)[:20]}")
+
+        if cache_stocks or _is_pipe_producer:
+            return {'stocks': kept}
 
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
