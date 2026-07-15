@@ -39,6 +39,7 @@ from difoss_stock_util.metric_data.market_data import MarketData
 from datetime import time as datetime_time
 from difoss_stock_util.tdx_util.tdx_quant_data_dictionary import *
 from difoss_stock_util.time_util import TimeUtils
+from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
 from typing import Optional, Dict, List
 from tdx_quant_util import *
 from sqlalchemy import text, create_engine
@@ -758,13 +759,15 @@ def _query_table_stocks(db_url: str, table_name: str, console: Console,
                     # 限单日：索引 (symbol, period, time DESC) 配合 time 范围过滤
                     sql = text(f"""
                         SELECT DISTINCT symbol FROM {table_name}
-                        WHERE date(TIME) = :trade_date
+                        WHERE TIME = :trade_date
+                        ORDER BY symbol
                     """)
                     rows = conn.execute(sql, {'trade_date': trade_date}).fetchall()
                 else:
                     rows = conn.execute(text(
-                        f"SELECT DISTINCT symbol FROM {table_name}"
-                    )).fetchall()
+                        f"""SELECT DISTINCT symbol FROM {table_name} 
+                        ORDER BY symbol
+                    """)).fetchall()
                 stocks = {str(r[0]) for r in rows}
             elif table_name == 'history_data_1d':
                 if trade_date:
@@ -1742,8 +1745,6 @@ def stock_block_stat(_ctx: click.Context,
             CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
             return
 
-        from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
-
         # ── Step 1: 获取 K 线数据，计算每只个股的涨幅 ──
         progress_print(f"[bold]STEP 1/3[/bold] 获取 {len(stocks_list)} 只个股在 {trading_date_str} 附近的 K 线数据...")
         dict_df = tq.get_market_data(
@@ -1956,8 +1957,6 @@ def stock_stat(_ctx: click.Context,
                       f"买入: [yellow]{entry_date_str}[/yellow]，"
                       f"截止: [yellow]{end_date_str}[/yellow]，"
                       f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
-
-        from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
 
         # ── Step 1: 批量获取 K 线 ──
         progress_print(f"[bold]STEP 1/{'3' if daily else '2'}[/bold] 获取 {len(stocks_list)} 只个股的 K 线数据...")
@@ -2216,8 +2215,6 @@ def filter_capital_flow(_ctx: click.Context,
         CONSOLE.print(f"\n[bold]💰 主力资金流筛选[/bold] — 日期: [yellow]{trading_date_str}[/yellow]"
                       f"{' (实时)' if is_realtime else ' (历史 DB)'}，"
                       f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
-
-        from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress, progress_print
 
         passed_stocks = set()
         stock_details = []  # 用于 verbose 打印
@@ -3010,7 +3007,7 @@ def formula(
         if _db_url:
             StockMetrics.init_db(_db_url)
 
-        for stock_idx, full_code in enumerate(stocks):
+        for stock_idx, full_code in enumerate_with_progress(stocks, task_name="逐个股票调用公式", console=CONSOLE):
             # NOTICE: 通达信缺陷：L2 数据需要软件先跳转（触发界面拉取后）才能获取，不然全是 0 值
             # 跳转逻辑：首只在循环内跳转，后续在上一轮末尾已提前跳转
             if jump_tdx is not None and stock_idx == 0:
@@ -3760,5 +3757,77 @@ def read_from_file(_ctx: click.Context,
         if df is not None:
             return {key: stocks, 'df': df}
         return {key: stocks}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
+              default=STOCKS, required=False, help='股票代码列表。管道模式下可从上游自动获取')
+@click.option('--file', '-f', 'file_path', type=str, required=True,
+              help='输出文件路径。无路径分隔符时自动放入 output/ 目录；后缀名决定格式（.txt/.csv/.xlsx/.json）')
+@click.option('--key', '-k', 'key', default='stocks', show_default=True, help='JSON 输出时的键名')
+@click.pass_context
+def save_to_file(_ctx: click.Context,
+                  stocks: list[str],
+                  file_path: str,
+                  key: str,
+                  cache_stocks: bool,
+                  stock_group_index: int,
+                  **kwargs):
+    """将 stocks 保存到文件中（与 read_from_file 对应）
+
+    根据 --file 后缀名自动识别格式：.txt / .csv / .xlsx / .json。
+    文件路径不含 / 或 \\ 时自动加上 output/ 前缀。
+
+    使用示例：
+        gs -m 50 | sf -f all_a.txt                       # → output/all_a.txt
+        fl | sf -f D:/data/filtered.xlsx                  # → 绝对路径
+        sf -f result.json -k 'my_stocks'                 # → output/result.json
+    """
+    CONSOLE = _ctx.obj['console']  # type: Console
+
+    try:
+        stocks_list = list(stocks)
+        if not stocks_list:
+            CONSOLE.print("[red]未提供任何股票代码[/red]")
+            return
+
+        # 无路径分隔符 → 自动加 output/ 前缀
+        import os
+        if '/' not in file_path and '\\' not in file_path:
+            os.makedirs('output', exist_ok=True)
+            file_path = os.path.join('output', file_path)
+
+        # 后缀名 → 文件类型
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in ('.txt', '.csv', '.xlsx', '.json'):
+            CONSOLE.print(f"[red]不支持的文件后缀: {ext}（支持 .txt / .csv / .xlsx / .json）[/red]")
+            return
+
+        if ext == '.txt':
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(stocks_list))
+        elif ext == '.csv':
+            import csv
+            with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.writer(f)
+                for s in stocks_list:
+                    writer.writerow([s])
+        elif ext == '.xlsx':
+            import pandas as pd
+            df = pd.DataFrame({key: stocks_list})
+            df.to_excel(file_path, index=False)
+        elif ext == '.json':
+            import json
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump({key: stocks_list}, f, ensure_ascii=False, indent=2)
+
+        CONSOLE.print(f"✅ 已保存 [green]{len(stocks_list)}[/green] 只股票到 [yellow]{file_path}[/yellow]")
+
+        if cache_stocks:
+            return {'stocks': stocks_list}
+
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
