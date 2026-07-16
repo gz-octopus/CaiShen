@@ -2818,8 +2818,8 @@ def user_sector(
             only_in_2 = stocks2 - stocks1
             in_both = stocks1 & stocks2
             
-            name1 = sectors_code2name(code1)
-            name2 = sectors_code2name(code2)
+            name1 = sectors_code2name.get(code1)
+            name2 = sectors_code2name.get(code2)
 
             _CSL.print(f"仅在 {name1} 中的个股（共 {len(only_in_1)} 只）: ", end='')
             _CSL.print(Pretty(list(only_in_1), max_length=max_to_show) if max_to_show > 0 else list(only_in_1))
