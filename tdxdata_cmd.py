@@ -2817,14 +2817,17 @@ def user_sector(
             only_in_1 = stocks1 - stocks2
             only_in_2 = stocks2 - stocks1
             in_both = stocks1 & stocks2
+            
+            name1 = sectors_code2name(code1)
+            name2 = sectors_code2name(code2)
 
-            _CSL.print(f"仅在 {abbrev1} 中的个股（共 {len(only_in_1)} 只）: ", end='')
+            _CSL.print(f"仅在 {name1} 中的个股（共 {len(only_in_1)} 只）: ", end='')
             _CSL.print(Pretty(list(only_in_1), max_length=max_to_show) if max_to_show > 0 else list(only_in_1))
 
-            _CSL.print(f"仅在 {abbrev2} 中的个股（共 {len(only_in_2)} 只）: ", end='')
+            _CSL.print(f"仅在 {name2} 中的个股（共 {len(only_in_2)} 只）: ", end='')
             _CSL.print(Pretty(list(only_in_2), max_length=max_to_show) if max_to_show > 0 else list(only_in_2))
 
-            _CSL.print(f"同时在 {abbrev1} 和 {abbrev2} 中的个股（共 {len(in_both)} 只）: ", end='')
+            _CSL.print(f"同时在 {name1} 和 {name2} 中的个股（共 {len(in_both)} 只）: ", end='')
             _CSL.print(Pretty(list(in_both), max_length=max_to_show) if max_to_show > 0 else list(in_both))
 
 
