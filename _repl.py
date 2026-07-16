@@ -33,7 +33,7 @@ def _example(_ctx: click.Context,
     stocks: list[str]
 ):
     """"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    global CONSOLE
     try:
         for full_code in stocks:
             # TODO:
@@ -55,6 +55,8 @@ def init(_ctx: click.Context):
     if not CFG:
         CFG = read_yaml_config(CONFIG_PATH)
     _ctx.obj['cfg'] = CFG
+    
+    print_locals()
 
     try:
         # xtdata.enable_hello = False

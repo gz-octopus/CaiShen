@@ -49,13 +49,13 @@ def _example(_ctx: click.Context,
     stocks: list[str]
 ):
     """"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for full_code in stocks:
             # TODO:
-            CONSOLE.print(f"{full_code} :", )
+            _CSL.print(f"{full_code} :", )
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @command_with_abbrev(abbrev='ip', context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -63,13 +63,13 @@ def _example(_ctx: click.Context,
 def best_ip(_ctx: click.Context,
 ):
     """获取最佳IP地址"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         # 旧版本的 pytdx 内置的 ip 列表，可能不太准确了，后续可以考虑更新一下
         ip = select_best_ip('future')
-        CONSOLE.print(f"最佳IP: {ip}")
+        _CSL.print(f"最佳IP: {ip}")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=['MHI2604'], required=True, help='股票代码列表 (如: 688318.SH)')
@@ -82,10 +82,10 @@ def get_instrument_bars(_ctx: click.Context,
 ):
     """获取期货合约数量"""
 
-    CONSOLE = _ctx.obj['console'] # type: Console
-    CFG = _ctx.obj['cfg'] # type: dict
-    ip = CFG.get('mootdx', {}).get('ip', '112.74.214.43')
-    port = int(CFG.get('mootdx', {}).get('port', 7727))
+    _CSL = _ctx.obj['console'] # type: Console
+    _CFG = _ctx.obj['cfg'] # type: dict
+    ip = _CFG.get('mootdx', {}).get('ip', '112.74.214.43')
+    port = int(_CFG.get('mootdx', {}).get('port', 7727))
     frequency = get_frequency(period)
 
     print_locals()
@@ -139,6 +139,7 @@ def get_market_data(
     show_table: bool,
 ):
     """在线获取K线数据"""
+    _CSL = _ctx.obj['console'] # type: Console
 
     # NOTE: mootdx 特有的，days 的 vol 比 1d 大 100 倍，成交量单位：手
     frequency = get_frequency(period)
@@ -159,11 +160,11 @@ def get_market_data(
 
             if show_table:
                 print_dataframe(feed, title=f"股票数据 {full_code} （{period}）K线数据",
-                                show_footer=True, printer=CONSOLE.print)
+                                show_footer=True, printer=_CSL.print)
             else:
-                CONSOLE.print(f"股票数据 {full_code} （{period}）K线数据:\n{feed}")
+                _CSL.print(f"股票数据 {full_code} （{period}）K线数据:\n{feed}")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(short_help="获取K线数据（本地）", context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -193,6 +194,8 @@ def get_market_data_local(
     show_table: bool,
 ):
     """读取股票本地行情数据"""
+    _CSL = _ctx.obj['console'] # type: Console
+    
     adjust = {
         'none': '',
         'front': 'before',
@@ -217,11 +220,11 @@ def get_market_data_local(
 
             if show_table:
                 print_dataframe(feed, title=f"股票数据 {full_code} （{period}）K线数据",
-                                show_footer=True, printer=CONSOLE.print)
+                                show_footer=True, printer=_CSL.print)
             else:
-                CONSOLE.print(f"股票数据 {full_code} （{period}）K线数据:\n{feed}")
+                _CSL.print(f"股票数据 {full_code} （{period}）K线数据:\n{feed}")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 
@@ -240,11 +243,10 @@ def transaction(_ctx: click.Context,
     date: datetime,
 ):
     """查询（历史）分笔成交"""
+    _CSL = _ctx.obj['console'] # type: Console
     date = date.strftime('%Y%m%d')
 
     print_locals()
-
-    global CONSOLE
 
     try:
         std_client = _ctx.obj['std_client'] # type: StdQuotes
@@ -256,7 +258,7 @@ def transaction(_ctx: click.Context,
 
             print_dataframe(df, title=f"{full_code} 的分笔{'历史' if is_history else ''}成交")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 # --------------------------------------------------------------------------------
 # 常规函数

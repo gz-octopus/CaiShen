@@ -33,7 +33,7 @@ def security_code(_ctx: click.Context,
     stocks: list[str]
 ):
     """证券代码（SecurityCode）功能测试"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    global CONSOLE
     try:
         for full_code in stocks:
             _s_vec = full_code.split('.')

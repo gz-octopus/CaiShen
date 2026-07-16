@@ -21,10 +21,6 @@ from datetime import datetime
 from difoss_stock_util.metric_data import SLBDetail
 
 # --------------------------------------------------------------------------------
-# Global Variables
-CONSOLE = console.Console()
-
-# --------------------------------------------------------------------------------
 # 全局变量
 CONSOLE = Console()
 CFG = None

@@ -282,7 +282,7 @@ def market(_ctx: click.Context,
     if ('ALL' in markets) or (not markets):
         markets = ALL_MARKET_LIST
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
     print_locals()
 
@@ -296,20 +296,20 @@ def market(_ctx: click.Context,
                     full_codes = [x.full_code for x in codes]
                     xt_stocks.extend(full_codes)
 
-                CONSOLE.print(f"市场 {market} 有 {len(codes)} 只股票")
+                _CSL.print(f"市场 {market} 有 {len(codes)} 只股票")
 
             tq_stocks = tq.get_stock_list()
 
-            CONSOLE.print(f"xtquant 共返回 {len(xt_stocks)} 只股票，tq 共返回 {len(tq_stocks)} 只股票")
+            _CSL.print(f"xtquant 共返回 {len(xt_stocks)} 只股票，tq 共返回 {len(tq_stocks)} 只股票")
             if len(xt_stocks) != len(tq_stocks):
                 dif = find_list_diff(xt_stocks, tq_stocks)
-                CONSOLE.print(f"对比市场 {ALL_MARKET_LIST}，xtquant 与 tq_center 返回的两个结果差异: ")
+                _CSL.print(f"对比市场 {ALL_MARKET_LIST}，xtquant 与 tq_center 返回的两个结果差异: ")
                 only_in_xt = dif.get('only_in_list1', [])
                 only_in_tq = dif.get('only_in_list2', [])
-                CONSOLE.print(f" 只存在于 xt 返回結果: ", end='')
-                CONSOLE.print(Pretty(only_in_xt, max_length=max_to_show) if max_to_show > 0 else only_in_xt)
-                CONSOLE.print(f" 只存在于 tq 返回結果: ", end='')
-                CONSOLE.print(Pretty(only_in_tq, max_length=max_to_show) if max_to_show > 0 else only_in_tq)
+                _CSL.print(f" 只存在于 xt 返回結果: ", end='')
+                _CSL.print(Pretty(only_in_xt, max_length=max_to_show) if max_to_show > 0 else only_in_xt)
+                _CSL.print(f" 只存在于 tq 返回結果: ", end='')
+                _CSL.print(Pretty(only_in_tq, max_length=max_to_show) if max_to_show > 0 else only_in_tq)
 
             return
 
@@ -320,14 +320,14 @@ def market(_ctx: click.Context,
             codes_in_markets.update(full_codes)
 
             codes_with_name = [f"{x}|{get_stock_name(x)}" for x in full_codes]
-            CONSOLE.print(f"市场 {market} 股票共 {len(full_codes)} 只：", end='')
-            CONSOLE.print(Pretty(codes_with_name, max_length=max_to_show) if max_to_show > 0 else codes)
+            _CSL.print(f"市场 {market} 股票共 {len(full_codes)} 只：", end='')
+            _CSL.print(Pretty(codes_with_name, max_length=max_to_show) if max_to_show > 0 else codes)
 
         if cache_stocks:
             return {'stocks': codes_in_markets}
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -339,12 +339,13 @@ def stock(
     stocks: list[str]
 ):
     """股票相关功能"""
+    _CSL = _ctx.obj['console'] # type: Console
     # TODO: 待完善
     print_locals()
     try:
         pass
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 # ---------------------------------------------------------------------------------------------
 # 基础行情信息
@@ -367,9 +368,9 @@ def download_history_data(_ctx: click.Context,
     """下载历史数据(xtdata)"""
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
-    with ProgressManager.init(stock_list=stocks, console=CONSOLE) as pm:
+    with ProgressManager.init(stock_list=stocks, console=_CSL) as pm:
         try:
             # FUCK: 他妈的 xtdata 真是啰嗦！！
             params = dict(
@@ -384,7 +385,7 @@ def download_history_data(_ctx: click.Context,
 
             xtdata.download_history_data2(**params)
         except Exception as e:
-            CONSOLE.print_exception(extra_lines=5, show_locals=True)
+            _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(short_help="获取K线数据", context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -417,6 +418,8 @@ def get_market_data(_ctx: click.Context,
                     **kwargs,
 ):
     """获取K线数据(xtdata)"""
+    _CSL = _ctx.obj['console'] # type: Console
+    
     dt = DividendType.from_str(dividend_type) # type: DividendType
     adjust = {
         'none': None,
@@ -442,7 +445,6 @@ def get_market_data(_ctx: click.Context,
         if start_time:
             parameters.update({'start_time': start_time.strftime("%Y%m%d%H%M%S")})
 
-    CONSOLE = _ctx.obj['console'] # type: Console
     try:
         if is_ex:
             stock_2_df = xtdata.get_market_data_ex(**parameters)
@@ -450,7 +452,7 @@ def get_market_data(_ctx: click.Context,
             res = xtdata.get_market_data(**parameters)
 
             if verbose:
-                CONSOLE.print(f"get_market_data RETURN: {res}")
+                _CSL.print(f"get_market_data RETURN: {res}")
 
             # DEBUG: 发现他妈的居然以 stock 作为 key，而不是 datetime
             # for k, v in res.items():
@@ -459,16 +461,16 @@ def get_market_data(_ctx: click.Context,
             stock_2_df = transform_data(res)
             
         if not stock_2_df:
-            CONSOLE.print("无返回数据")
+            _CSL.print("无返回数据")
             return
 
         for code, stock_df in stock_2_df.items():
             print_dataframe(stock_df, title=f"股票数据 {code} （{period}）K线数据",
-                            show_footer=True, printer=CONSOLE.print)
+                            show_footer=True, printer=_CSL.print)
             
         return {'dfs': stock_2_df}
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 
@@ -482,7 +484,7 @@ def test(_ctx: click.Context,
     """获取合约基本信息（不校验证券代码，请自定带上市场代码）"""
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -505,7 +507,7 @@ def get_instrument_detail(
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
     try:
         for full_code in stocks:
@@ -525,9 +527,9 @@ def get_instrument_detail(
                 else:
                     detail = {k:v for k,v in detail.items() if v}
                 come_from = 'db' if is_by_db else 'xtdata'
-                CONSOLE.print(f"从 {come_from} 中查得 {full_code} 的 InstrumentDetail: {detail}")
+                _CSL.print(f"从 {come_from} 中查得 {full_code} 的 InstrumentDetail: {detail}")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -553,7 +555,7 @@ def get_sector_list(_ctx: click.Context,
     stock_group_index: int,
 ):
     """获取A股板块代码列表"""
-    global CONSOLE
+    _CSL = _ctx.obj['console'] # type: Console
     if max_to_show <= 0:
         max_to_show = None
 
@@ -566,15 +568,15 @@ def get_sector_list(_ctx: click.Context,
                 stocks_in_sector = xtdata.get_stock_list_in_sector(sector_name=sector)
 
                 stocks_in_sectors[sector] = stocks_in_sector
-                CONSOLE.print(f"板块 {sector} 包含：", end='')
-                CONSOLE.print(Pretty(stocks_in_sector, max_length=max_to_show) if max_to_show else list(stocks_in_sector))
-                CONSOLE.print(f"共 {len(stocks_in_sector)} 只 交易标的")
+                _CSL.print(f"板块 {sector} 包含：", end='')
+                _CSL.print(Pretty(stocks_in_sector, max_length=max_to_show) if max_to_show else list(stocks_in_sector))
+                _CSL.print(f"共 {len(stocks_in_sector)} 只 交易标的")
 
                 for stock in stocks_in_sector:
                     try:
                         sc = SecurityCode(stock)
                     except Exception as e:
-                        CONSOLE.print(f"无法解析交易标的 {stock} 的代码，跳过期货/期权类型判断")
+                        _CSL.print(f"无法解析交易标的 {stock} 的代码，跳过期货/期权类型判断")
                         continue
 
                     if sc.is_futures:
@@ -582,11 +584,11 @@ def get_sector_list(_ctx: click.Context,
                     elif sc.is_futures_option:
                         future_options.add(stock)
             if futures:
-                CONSOLE.print(f"在上述板块中发现期货交易标的 {len(futures)} 个：", end='')
-                CONSOLE.print(Pretty(futures, max_length=max_to_show) if max_to_show else list(futures))
+                _CSL.print(f"在上述板块中发现期货交易标的 {len(futures)} 个：", end='')
+                _CSL.print(Pretty(futures, max_length=max_to_show) if max_to_show else list(futures))
             if future_options:
-                CONSOLE.print(f"在上述板块中发现期货期权交易标的 {len(future_options)} 个：", end='')
-                CONSOLE.print(Pretty(future_options, max_length=max_to_show) if max_to_show else list(future_options))
+                _CSL.print(f"在上述板块中发现期货期权交易标的 {len(future_options)} 个：", end='')
+                _CSL.print(Pretty(future_options, max_length=max_to_show) if max_to_show else list(future_options))
 
 
             if stock_contains:
@@ -599,9 +601,9 @@ def get_sector_list(_ctx: click.Context,
                                     stocks_in_filtered_sectors[sector] = []
                                 stocks_in_filtered_sectors[sector].append(stock)
                                 break
-                    CONSOLE.print(f"板块 {sector} 中包含 {stock_contains} 的交易标的: ", end='')
-                    CONSOLE.print(Pretty(stocks_in_filtered_sectors.get(sector, []), max_length=max_to_show))
-                    CONSOLE.print(f"共 {len(stocks_in_filtered_sectors.get(sector, []))} 只 交易标的")
+                    _CSL.print(f"板块 {sector} 中包含 {stock_contains} 的交易标的: ", end='')
+                    _CSL.print(Pretty(stocks_in_filtered_sectors.get(sector, []), max_length=max_to_show))
+                    _CSL.print(f"共 {len(stocks_in_filtered_sectors.get(sector, []))} 只 交易标的")
 
             if wanna_main_contract is not None:
 
@@ -627,19 +629,19 @@ def get_sector_list(_ctx: click.Context,
                                     is_recent_stocks.add(stock)
 
                         except Exception as e:
-                            CONSOLE.print(f"无法解析交易标的 {stock} 的代码，跳过主力合约判断")
+                            _CSL.print(f"无法解析交易标的 {stock} 的代码，跳过主力合约判断")
                             continue
 
                 if main_contract < 0:
-                    CONSOLE.print(f"期货/期权 交易标的 MainContract 统计结果：{main_contract_2_stock}")
+                    _CSL.print(f"期货/期权 交易标的 MainContract 统计结果：{main_contract_2_stock}")
                 else:
                     wanna_stocks = main_contract_2_stock.get(str(wanna_main_contract), set())
-                    CONSOLE.print(f"主力合约 MainContract = {wanna_main_contract} 的标的有 {len(wanna_stocks)} ：{wanna_stocks}")
-                CONSOLE.print(f"共 {len(main_contract_2_stock)} 个不同的 MainContract 值")
-                CONSOLE.print(f"在上述板块中发现正在交易(IsTrading=True)的标的 {len(is_trading_stocks)} 个：", end='')
-                CONSOLE.print(Pretty(is_trading_stocks, max_length=max_to_show) if max_to_show else list(is_trading_stocks))
-                CONSOLE.print(f"在上述板块中发现 IsRecent=True 的标的 {len(is_recent_stocks)} 个：", end='')
-                CONSOLE.print(Pretty(is_recent_stocks, max_length=max_to_show) if max_to_show else list(is_recent_stocks))
+                    _CSL.print(f"主力合约 MainContract = {wanna_main_contract} 的标的有 {len(wanna_stocks)} ：{wanna_stocks}")
+                _CSL.print(f"共 {len(main_contract_2_stock)} 个不同的 MainContract 值")
+                _CSL.print(f"在上述板块中发现正在交易(IsTrading=True)的标的 {len(is_trading_stocks)} 个：", end='')
+                _CSL.print(Pretty(is_trading_stocks, max_length=max_to_show) if max_to_show else list(is_trading_stocks))
+                _CSL.print(f"在上述板块中发现 IsRecent=True 的标的 {len(is_recent_stocks)} 个：", end='')
+                _CSL.print(Pretty(is_recent_stocks, max_length=max_to_show) if max_to_show else list(is_recent_stocks))
 
             if category:
                 for sector in stocks_in_sectors.keys():
@@ -649,7 +651,7 @@ def get_sector_list(_ctx: click.Context,
         else:
             # 不指定板块时获取全部板块列表并显示
             sectors = xtdata.get_sector_list()
-            CONSOLE.print(f"{sectors}")
+            _CSL.print(f"{sectors}")
 
         sectors_filtered = []
         if contains:
@@ -659,7 +661,7 @@ def get_sector_list(_ctx: click.Context,
                         sectors_filtered.append(sector)
                         break
 
-            CONSOLE.print(f"板块代码列表（过滤含有 {contains} ）: {sectors_filtered}\n{len(sectors_filtered)} / {len(sectors)} 个板块")
+            _CSL.print(f"板块代码列表（过滤含有 {contains} ）: {sectors_filtered}\n{len(sectors_filtered)} / {len(sectors)} 个板块")
 
         if cache_stocks:
             stocks_to_saved = set()
@@ -671,7 +673,7 @@ def get_sector_list(_ctx: click.Context,
             return {'stocks': stocks_to_saved}
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -690,19 +692,19 @@ def get_l2_quote(_ctx: click.Context,
     count: int,
 ):
     """获取level2行情快照数据"""
-    global CONSOLE
+    _CSL = _ctx.obj['console'] # type: Console
     
     start_time = start_time.strftime('%Y%m%d%H%M%S') if start_time else ''
     end_time = end_time.strftime('%Y%m%d%H%M%S') if end_time else ''
     
-    print_locals(printer=CONSOLE.print)
+    print_locals(printer=_CSL.print)
 
     try:
         res = xtdata.get_l2_order(field_list=fields, stock_code=stocks, start_time=start_time, end_time=end_time, count=count)
-        CONSOLE.print(f"get_l2_order: {res}")
+        _CSL.print(f"get_l2_order: {res}")
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -710,12 +712,12 @@ def get_l2_quote(_ctx: click.Context,
 def _download_sector_data(_ctx: click.Context,
 ):
     """下载板块分类信息【未成功】"""
-    global CONSOLE
+    _CSL = _ctx.obj['console'] # type: Console
     # res = xtdata.download_sector_data()
     # DEBUG: 展开 download_sector_data 内的内容并添加 callback 观察
-    with ProgressManager.init([], CONSOLE, "下载板块分类信息") as pm:
+    with ProgressManager.init([], _CSL, "下载板块分类信息") as pm:
         xtdata.download_history_data2([], (2009, 86400000), callback=pm.callback)
-    # CONSOLE.print(f"返回: {res}")
+    # _CSL.print(f"返回: {res}")
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -725,13 +727,13 @@ def _example(_ctx: click.Context,
     stocks: list[str]
 ):
     """"""
-    # CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for full_code in stock:
             # TODO:
-            CONSOLE.print(f"{full_code} :", )
+            _CSL.print(f"{full_code} :", )
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ======================

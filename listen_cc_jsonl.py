@@ -16,7 +16,7 @@ from rich.table import Table
 
 # ------------------------------------------------------------------------------------------
 # global variables
-_CONSOLE = Console()
+_CSL = Console()
 
 # NOTICE: 直接 from difoss_stock_util.click_util import split_comma 会比较慢，所以在这里显式定义一个快速版本
 def split_comma(ctx: click.Context, param: click.Parameter, value) -> list[str]:
@@ -111,23 +111,23 @@ def list_file_types(filepath: Path) -> dict:
 
 def print_type_summary(type_counts: dict, filepath: Path):
     """打印 type 汇总表格"""
-    global _CONSOLE
+    global _CSL
 
-    _CONSOLE.print(f"\n{'=' * 66}")
-    _CONSOLE.print(f"  type 汇总 — {filepath.name}")
-    _CONSOLE.print(f"{'=' * 66}")
+    _CSL.print(f"\n{'=' * 66}")
+    _CSL.print(f"  type 汇总 — {filepath.name}")
+    _CSL.print(f"{'=' * 66}")
     total = sum(type_counts.values())
     if not type_counts:
-        _CONSOLE.print("  (无数据)")
+        _CSL.print("  (无数据)")
     else:
         max_cnt = max(type_counts.values())
         for t, cnt in sorted(type_counts.items(), key=lambda x: -x[1]):
             bar_len = min(30, cnt * 30 // max_cnt) if max_cnt else 0
             bar = '█' * bar_len
-            _CONSOLE.print(f"  {t:<32} {cnt:>6}  {bar}")
-        _CONSOLE.print(f"  {'─' * 32}  {'─' * 6}")
-        _CONSOLE.print(f"  {'总计':<32} {total:>6}")
-    _CONSOLE.print(f"{'=' * 66}\n")
+            _CSL.print(f"  {t:<32} {cnt:>6}  {bar}")
+        _CSL.print(f"  {'─' * 32}  {'─' * 6}")
+        _CSL.print(f"  {'总计':<32} {total:>6}")
+    _CSL.print(f"{'=' * 66}\n")
 
 
 def _format_size(size_bytes: int) -> str:
@@ -158,9 +158,9 @@ def list_jsonl_files() -> list[dict]:
 
 def print_files_table(files: list[dict]):
     """用 rich 表格打印 jsonl 文件列表"""
-    global _CONSOLE
+    global _CSL
     if not files:
-        _CONSOLE.print("[yellow]目录下没有 .jsonl 文件[/yellow]")
+        _CSL.print("[yellow]目录下没有 .jsonl 文件[/yellow]")
         return
 
     project_dir = get_project_dir()
@@ -172,7 +172,7 @@ def print_files_table(files: list[dict]):
     for f in files:
         table.add_row(f['文件名'], f['修改时间'], f['大小'])
 
-    _CONSOLE.print(table)
+    _CSL.print(table)
 
 
 def _traverse_path(value, parts: List[str]):
@@ -332,15 +332,15 @@ def _fmt_entry(entry: dict, fields: List[str], must_fields: Optional[List[str]] 
 def _flush_group(entries: list[dict], fields: List[str], msg_id: str = '',
                   must_fields: Optional[List[str]] = None):
     """输出一个 messageId 分组内的所有条目"""
-    global _CONSOLE
+    global _CSL
     if not entries:
         return
 
     mid_display = msg_id if msg_id else '(无 messageId)'
-    _CONSOLE.print(f"\n── [cyan]{mid_display}[/cyan] ──")
+    _CSL.print(f"\n── [cyan]{mid_display}[/cyan] ──")
     for entry in entries:
-        _CONSOLE.print(_fmt_entry(entry, fields, must_fields))
-        _CONSOLE.print()  # 同组内各条目之间空行
+        _CSL.print(_fmt_entry(entry, fields, must_fields))
+        _CSL.print()  # 同组内各条目之间空行
 
 def _scan_matching_prompt_ids(filepath: Path, search_text: str) -> set:
     """
@@ -386,7 +386,7 @@ def tail_file(filepath: Path, fields: List[str], must_fields: Optional[List[str]
         prompt_filter = _scan_matching_prompt_ids(filepath, find_user_message)
         logger.info(f"find-user-message: '{find_user_message}' → {len(prompt_filter)} 个 promptId: {prompt_filter}")
         if not prompt_filter:
-            _CONSOLE.print(f"[yellow]未找到包含 '{find_user_message}' 的用户消息[/yellow]")
+            _CSL.print(f"[yellow]未找到包含 '{find_user_message}' 的用户消息[/yellow]")
             return
 
     pending: list[tuple[str, list[dict]]] = []  # [(mid, [entry, ...]), ...]

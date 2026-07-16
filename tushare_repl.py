@@ -34,7 +34,7 @@ def stock_basic(
     _ctx: click.Context,
     limit: int,
 ):
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     _ts_pro_api = _ctx.obj['ts_pro_api']  # type: DataApi
 
     # 拉取数据
@@ -64,13 +64,13 @@ def _example(_ctx: click.Context,
     stocks: list[str]
 ):
     """"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for full_code in stocks:
             # TODO:
-            CONSOLE.print(f"{full_code} :", )
+            _CSL.print(f"{full_code} :", )
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # --------------------------------------------------------------------------------

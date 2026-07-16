@@ -80,7 +80,7 @@ ls -l "$SITE_PACKAGES" | grep ' -> '
 - **`*_repl.py`** — 入口点。通过 `repl_cli_main()`（来自 `difoss_stock_util.click_util`）定义交互式 shell。包含 `init()` 回调函数，用于设置全局状态（配置、数据库连接、数据源客户端）。直接运行。
 - **`*_cmd.py`** — 命令定义，以 `@click.command()` 装饰函数形式存在。由 `repl_cli_main()` 通过 `cmd_filenames` 参数加载。
 
-`init()` 回调接收 `click.Context`，将全局变量（`CONSOLE`、`CFG`、DB URL）存入 `ctx.obj`（一个 `defaultdict`），并初始化数据源客户端。
+`init()` 回调接收 `click.Context`，将全局变量（`CONSOLE`、`CFG`、DB URL）存入 `ctx.obj`（一个 `defaultdict`），并初始化数据源客户端。从 ctx.obj 中获得的局部变量，为了不想被 print_locals() 打印出细节，需要使用 _ 开头的命名（如：`_CSL`、`_CFG`），全局变量则可直接用 global 引入（不会被 print_locals() 打印）。
 
 `repl_cli_main()` 支持两种可选模式（通过参数启用）：
 
@@ -170,19 +170,19 @@ click.core.Parameter.__init__ = _patched_parameter_init
 @click.pass_context
 def some_command(_ctx: click.Context, stocks: list[str], ...):
     """命令说明（中文）"""
-    CONSOLE = _ctx.obj['console']
+    _CSL = _ctx.obj['console'] # # type: console.Console
     try:
         # 命令逻辑
         ...
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 ```
 
 要点：
 - `context_settings` 固定为 `{'help_option_names': ['-?', '--help', '-h']}`
 - 第一个参数必须为 `_ctx: click.Context`（配合 `@click.pass_context`）
 - `ctx.obj` 始终包含三个键：`config_path`、`console`、`cfg`
-- 异常处理使用 `CONSOLE.print_exception(extra_lines=5, show_locals=True)`
+- 异常处理使用 `_CSL.print_exception(extra_lines=5, show_locals=True)`
 - `split_comma_stocks` 是用于 `multiple=True` 股票代码选项的标准 callback，会将输入自动解析并补全市场后缀（如 `603358` → `603358.SH`）
 
 ## 安全注意事项

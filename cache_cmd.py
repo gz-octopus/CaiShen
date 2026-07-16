@@ -49,7 +49,7 @@ STOCKS_DF = pd.DataFrame()
 STOCK_2_DF = dict() # type: Dict[str, pd.DataFrame]
 _STOCK_2_NAME = {}
 _ST_STOCK_2_NAME = {}
-_lock = threading.RLock()
+_LOCK = threading.RLock()
 
 class CacheManager:
     """统一管理缓存逻辑，避免装饰器直接操作 global 变量"""
@@ -325,17 +325,17 @@ def memory_cache(_ctx: click.Context,
     """内存缓存（仅在REPL下有效）"""
     # print_locals() # DEBUG
 
-    CONSOLE = _ctx.obj['console'] # type: console.Console
-    global STOCKS, GROUPED_STOCKS, _lock
+    _CSL = _ctx.obj['console'] # type: console.Console
+    global STOCKS, GROUPED_STOCKS, _LOCK
 
     # 1. 确定操作目标集
     targets = {idx: GROUPED_STOCKS[idx] for idx in group_indexes} if group_indexes else {None: STOCKS}
 
     try:
-        with _lock:
+        with _LOCK:
             # --- 步骤 2: 执行逻辑 ---
             if action in ['show', 's']:
-                _print_status(GROUPED_STOCKS, contains, CONSOLE, max_to_show, with_name)
+                _print_status(GROUPED_STOCKS, contains, _CSL, max_to_show, with_name)
 
                 # 保存成文件
                 if save_type_file:
@@ -378,7 +378,7 @@ def memory_cache(_ctx: click.Context,
             elif action in ['clear', 'c']:
                 total_cnt = sum([len(target_set) if target_set else 0 for target_set in targets.items()])
                 if not click.confirm(f"❓ 当前缓存中有 {total_cnt} 只股票，是否清空？"):
-                    CONSOLE.print('🔽 操作取消，并无删除任何股票。')
+                    _CSL.print('🔽 操作取消，并无删除任何股票。')
                     return
                 for _, target_set in targets.items():
                     target_set.clear()
@@ -388,15 +388,15 @@ def memory_cache(_ctx: click.Context,
                 # 特殊处理：差集逻辑较特殊，保持独立
                 for idx, target_set in targets.items():
                     diff = STOCKS.difference(target_set) if idx is not None else STOCKS
-                    CONSOLE.print(f"与分组 {idx or '缓存'} 的差集: {len(diff)} 只")
-                    CONSOLE.print(Pretty(diff, max_length=max_to_show))
+                    _CSL.print(f"与分组 {idx or '缓存'} 的差集: {len(diff)} 只")
+                    _CSL.print(Pretty(diff, max_length=max_to_show))
                 return
 
             elif action in ['cross', 'intersection', 'intersect', 'i']:
                 for idx, target_set in targets.items():
                     inter = STOCKS.intersection(target_set) if idx is not None else STOCKS
-                    CONSOLE.print(f"与分组 {idx or '缓存'} 的交集: {len(inter)} 只")
-                    CONSOLE.print(Pretty(inter, max_length=max_to_show))
+                    _CSL.print(f"与分组 {idx or '缓存'} 的交集: {len(inter)} 只")
+                    _CSL.print(Pretty(inter, max_length=max_to_show))
                 return
 
             # --- 步骤 4: 移动与复制 ---
@@ -405,10 +405,10 @@ def memory_cache(_ctx: click.Context,
 
             # --- 步骤 5: 统一显示逻辑 ---
             # 这里使用一个简单的函数来打印结果，避免重复代码
-            _print_status(targets, contains, CONSOLE, max_to_show, with_name)
+            _print_status(targets, contains, _CSL, max_to_show, with_name)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -439,9 +439,9 @@ def data_frame(_ctx: click.Context,
                prefix: str,
 ):
     """显示 DataFrame 缓存状态 (STOCKS_DF 和 STOCK_2_DF)"""
-    CONSOLE = _ctx.obj['console'] # type: console.Console
+    _CSL = _ctx.obj['console'] # type: console.Console
 
-    print_locals(printer=CONSOLE.print)
+    print_locals(printer=_CSL.print)
     global STOCKS_DF, STOCK_2_DF
 
     def _process_df(df: pd.DataFrame, is_permanent: bool) -> pd.DataFrame:
@@ -488,7 +488,7 @@ def data_frame(_ctx: click.Context,
         return display_df
 
 
-    with _lock:
+    with _LOCK:
 
         keys = list(STOCK_2_DF.keys())
 
@@ -496,17 +496,17 @@ def data_frame(_ctx: click.Context,
         if is_clean:
             total_cnt = len(keys)
             if not click.confirm(f"❓ 当前 STOCK_2_DF 缓存中有 {total_cnt} 只股票，是否清空？"):
-                CONSOLE.print('🔽 操作取消，并无删除任何股票。')
+                _CSL.print('🔽 操作取消，并无删除任何股票。')
                 return
             STOCK_2_DF.clear()
             keys = []
 
         # 1. 概览核心 STOCKS_DF
-        CONSOLE.print(f"\n[bold magenta]=== 核心行情 DataFrame (STOCKS_DF) ===[/bold magenta]")
+        _CSL.print(f"\n[bold magenta]=== 核心行情 DataFrame (STOCKS_DF) ===[/bold magenta]")
         if STOCKS_DF is not None and not STOCKS_DF.empty:
             print_dataframe(_process_df(STOCKS_DF))
         else:
-            CONSOLE.print("STOCKS_DF 为空。")
+            _CSL.print("STOCKS_DF 为空。")
 
         # 2. 查看特定股票的详细数据 STOCK_2_DF
         target_stocks = keys if (verbose or remove_fields or rename_fields) else stocks
@@ -524,25 +524,25 @@ def data_frame(_ctx: click.Context,
                     display_df = _process_df(STOCK_2_DF[matched_key], is_permanent=False)
 
                     if verbose:
-                        CONSOLE.print(f"\n[bold cyan]>>> 股票 {matched_key} 详情:[/bold cyan]")
+                        _CSL.print(f"\n[bold cyan]>>> 股票 {matched_key} 详情:[/bold cyan]")
                         print_dataframe(display_df, title=f'{matched_key}')
                 else:
-                    CONSOLE.print(f"[yellow]未找到股票 {s} 的 DataFrame 缓存。[/yellow]")
+                    _CSL.print(f"[yellow]未找到股票 {s} 的 DataFrame 缓存。[/yellow]")
         else:
             # 3. 概览扩展缓存清单（没有指定 stocks 或没有 --verbose/-v）
-            CONSOLE.print(f"\n[bold magenta]=== 股票扩展缓存清单 (STOCK_2_DF) ===[/bold magenta]")
+            _CSL.print(f"\n[bold magenta]=== 股票扩展缓存清单 (STOCK_2_DF) ===[/bold magenta]")
             if keys:
-                CONSOLE.print(f"当前共有 [bold]{len(keys)}[/bold] 只股票缓存：")
-                CONSOLE.print(Pretty(keys, max_length=max_to_show if max_to_show else len(keys)))
+                _CSL.print(f"当前共有 [bold]{len(keys)}[/bold] 只股票缓存：")
+                _CSL.print(Pretty(keys, max_length=max_to_show if max_to_show else len(keys)))
 
                 for code, df in STOCK_2_DF.items():
-                    CONSOLE.print(f"（第一个数据作为展示）")
+                    _CSL.print(f"（第一个数据作为展示）")
                     if isinstance(df, pd.DataFrame) and not df.empty:
                         display_df = _process_df(df, is_permanent=False)
                         print_dataframe(display_df, title=f"股票代码：{code} 缓存的 DataFrame")
                     break # 只显示一个就足够
             else:
-                CONSOLE.print("STOCK_2_DF 缓存为空。")
+                _CSL.print("STOCK_2_DF 缓存为空。")
 
 
 def _stocks_collector_v0(func):
@@ -635,7 +635,7 @@ def stocks_collector(
             if should_save and result:
                 res_stocks = result.get('stocks') if isinstance(result, dict) else None
 
-                with _lock:
+                with _LOCK:
                     # 分发逻辑：存入对应目标
                     if target_group is not None:
                         CACHE.update_group_stocks(target_group, res_stocks)
@@ -699,7 +699,7 @@ def blocks_collector(
             if should_save and result:
                 res_blocks = result.get('blocks') if isinstance(result, dict) else None
 
-                with _lock:
+                with _LOCK:
                     if target_group is not None:
                         CACHE.update_group_blocks(target_group, res_blocks)
                     else:
@@ -745,12 +745,12 @@ def df_collector(func=None, *, save_memory_param='cache_df'):
                     res_dfs = result.get('dfs')
 
                     if isinstance(res_df, pd.DataFrame):
-                        with _lock:
+                        with _LOCK:
                             # 1. 更新 DF 缓存
                             CACHE.update_dataframe(res_df, prefix=prefix)
 
                     if isinstance(res_dfs, dict) and len(result) > 0:
-                        with _lock:
+                        with _LOCK:
                             for code, df in res_dfs.items():
                                 if not isinstance(df, pd.DataFrame):
                                     raise TypeError(f"df (类型为：{type(df)}），不是 DataFrame 类型")
@@ -776,29 +776,29 @@ def df_collector(func=None, *, save_memory_param='cache_df'):
 def cache_stock_name(c2n: Dict[str, str]):
     """追加个股（code -> name）"""
     global _STOCK_2_NAME
-    with _lock:
+    with _LOCK:
         _STOCK_2_NAME.update(c2n)
 
 def get_stock_name(code: str, default=None) -> Optional[str]:
     global _STOCK_2_NAME
-    with _lock:
+    with _LOCK:
         return _STOCK_2_NAME.get(code, default)
 
 
 def cache_st_stock_name(c2n: Dict[str, str]):
     """追加 ST 股个股"""
     global _ST_STOCK_2_NAME
-    with _lock:
+    with _LOCK:
         _ST_STOCK_2_NAME.update(c2n)
 
 
 def is_st(code: str):
     global _ST_STOCK_2_NAME
-    with _lock:
+    with _LOCK:
         return _ST_STOCK_2_NAME.get(code) is not None
 
 
 def get_st_stocks():
     global _ST_STOCK_2_NAME
-    with _lock:
+    with _LOCK:
         return dict(_ST_STOCK_2_NAME)

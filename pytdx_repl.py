@@ -10,7 +10,8 @@ import traceback
 
 from difoss_stock_util.color_log_util import *
 from difoss_stock_util.click_util import *
-from difoss_stock_util import SecurityCode, SecurityType, MarketType
+from difoss_stock_util import SecurityCode, SecurityType, MarketType, read_yaml_config
+from rich import console
 
 from rich import print
 import pandas as pd
@@ -30,6 +31,8 @@ ALL_SECURITY_TYPE_CN_LIST = SecurityType.allows_cn()
 # 可使用 -ping 功能调用 select_best_ip() 获取最佳 IP:PORT
 IP = 'sztdx.gtjas.com'
 PORT = 7709
+
+CONSOLE = console.Console()
 
 # ---------------------------------------------------------------------------------------------------
 def get_market_enum(market_str: str) -> int:
@@ -220,13 +223,12 @@ def main(
 # ======================
 # 初始化
 def init(_ctx: click.Context):
-    global CFG, CONSOLE, CONFIG_PATH
+    global CFG, CONSOLE
 
     _ctx.ensure_object(dict)
-    _ctx.obj['config_path'] = CONFIG_PATH
     _ctx.obj['console'] = CONSOLE
     if not CFG:
-        CFG = read_yaml_config(CONFIG_PATH)
+        CFG = read_yaml_config()
     _ctx.obj['cfg'] = CFG
 
     try:

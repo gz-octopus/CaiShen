@@ -106,8 +106,8 @@ def download(_ctx: click.Context,
              quick: bool):
     """下载扫雷宝数据"""
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     # 设置时间变量
     NOW_DT = datetime.now()
@@ -115,13 +115,13 @@ def download(_ctx: click.Context,
     DEFAULT_OUTPUT_FOLDER = SLBFileManager.generate_dirname(BELONG_TRADING_DATE)
 
     # 读取扫雷宝基础目录配置
-    SLB_BASE_DIR = Path(CFG['slb']['base_dir'])
+    SLB_BASE_DIR = Path(_CFG['slb']['base_dir'])
     output_dir = SLB_BASE_DIR / DEFAULT_OUTPUT_FOLDER
 
     # 处理文件夹
     if not os.path.isdir(output_dir):
         os.mkdir(output_dir)
-        CONSOLE.print(f"✅ 创建输出目录: {output_dir}")
+        _CSL.print(f"✅ 创建输出目录: {output_dir}")
 
     # 处理市场参数
     if "ALL" in markets or all_markets:
@@ -138,18 +138,18 @@ def download(_ctx: click.Context,
     if markets:
         try:
             for market in markets:
-                CONSOLE.print(f"📈 处理市场: {market}")
+                _CSL.print(f"📈 处理市场: {market}")
                 # 获取市场中的股票
                 stock_codes_in_market = get_market_stocks(market)
                 stocks_schedule.update({code.full_code: False for code in stock_codes_in_market})
-                CONSOLE.print(f"   市场 {market} 共有 {len(stock_codes_in_market)} 只个股")
+                _CSL.print(f"   市场 {market} 共有 {len(stock_codes_in_market)} 只个股")
         except Exception as e:
             W(f"无法从 xtquant 获取股票列表: {e}")
-            CONSOLE.print("从现有库中的最近的全部股票列表")
+            _CSL.print("从现有库中的最近的全部股票列表")
             for market in markets:
                 stock_codes_in_market = get_local_stocks(market, SLBDetail)
                 stocks_schedule.update({code.full_code: False for code in stock_codes_in_market})
-                CONSOLE.print(f"   市场 {market} 共有 {len(stock_codes_in_market)} 只个股")
+                _CSL.print(f"   市场 {market} 共有 {len(stock_codes_in_market)} 只个股")
 
     # 统计现有文件
     mgr = SLBFileManager(output_dir)
@@ -157,10 +157,10 @@ def download(_ctx: click.Context,
     for full_code in stocks_existing:
         stocks_schedule.pop(full_code, None)  # 移除已经下载的股票
 
-    CONSOLE.print(f"🚧 股票总数: {len(stocks_schedule)}")
+    _CSL.print(f"🚧 股票总数: {len(stocks_schedule)}")
 
     if not stocks_schedule:
-        CONSOLE.print("✅ 所有股票数据已是最新，无需下载")
+        _CSL.print("✅ 所有股票数据已是最新，无需下载")
         return
 
     # 下载数据
@@ -175,10 +175,10 @@ def download(_ctx: click.Context,
 
         if os.path.exists(json_filepath):
             if verbose:
-                CONSOLE.print(f'⚠️ 文件已存在，跳过: {json_filename}')
+                _CSL.print(f'⚠️ 文件已存在，跳过: {json_filename}')
             continue
 
-        CONSOLE.print(f"🔽 尝试获取股票JSON数据: {stock_code}")
+        _CSL.print(f"🔽 尝试获取股票JSON数据: {stock_code}")
         try:
             result = fetch_tdx_json(stock_code)
         except Exception as e:
@@ -191,14 +191,14 @@ def download(_ctx: click.Context,
             if save:
                 with open(json_filepath, 'w', encoding='utf-8') as F:
                     F.write(json_str)
-                CONSOLE.print(f"✏️ 写入文件: {stock_code}")
+                _CSL.print(f"✏️ 写入文件: {stock_code}")
 
             if very_verbose:
-                CONSOLE.print(f"✅ 成功获取股票 {stock_code} 的 JSON 数据：{json_str}")
+                _CSL.print(f"✅ 成功获取股票 {stock_code} 的 JSON 数据：{json_str}")
 
             total_fs = SLBDetail._calculate_total_score(result)
             stock_name = result.get('name', '(未知股票)')
-            CONSOLE.print(f"📊 {stock_code} {stock_name} 扫雷宝总分: {total_fs}")
+            _CSL.print(f"📊 {stock_code} {stock_name} 扫雷宝总分: {total_fs}")
         else:
             full_stock_code = SecurityCode.guess_full_code(stock_code)
             E(f"❌ 无法获取股票JSON数据: {stock_code} ({full_stock_code})")
@@ -226,30 +226,30 @@ def import_to_db(_ctx: click.Context,
                  debug: bool):
     """将扫雷宝数据导入数据库"""
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     if date is None:
         date = datetime.now()
 
     if input_dir is None:
-        input_dir = get_input_dir(date, CFG)
+        input_dir = get_input_dir(date, _CFG)
 
     # 初始化数据库
-    if not init_database(db_type, CFG, verbose, debug):
+    if not init_database(db_type, _CFG, verbose, debug):
         return
 
-    CONSOLE.print(f"📂 开始处理扫雷宝数据目录：{input_dir} (date: {date.strftime('%Y-%m-%d')})")
+    _CSL.print(f"📂 开始处理扫雷宝数据目录：{input_dir} (date: {date.strftime('%Y-%m-%d')})")
 
     # 获取所有文件
     mgr = SLBFileManager(input_dir)
     json_file_infos = mgr.list_all_files()
 
     if not json_file_infos:
-        CONSOLE.print("❌ 没有找到扫雷宝数据文件")
+        _CSL.print("❌ 没有找到扫雷宝数据文件")
         return
 
-    CONSOLE.print(f"📄 找到 {len(json_file_infos)} 个扫雷宝数据文件")
+    _CSL.print(f"📄 找到 {len(json_file_infos)} 个扫雷宝数据文件")
 
     limiter = create_limiter(limit)
 
@@ -274,14 +274,14 @@ def import_to_db(_ctx: click.Context,
         # 检查是否为股票类型
         if code.security_type != SecurityType.STOCK:
             if verbose:
-                CONSOLE.print(f"⚠️ 删除非股票数据: {file_info['filename']} ({code.security_type})")
+                _CSL.print(f"⚠️ 删除非股票数据: {file_info['filename']} ({code.security_type})")
             mgr.delete_file(code)
             continue
 
         json_data = mgr.load_data(code)
 
         if not json_data:
-            CONSOLE.print(f"⚠️ 无法加载数据: {stock_full_code}")
+            _CSL.print(f"⚠️ 无法加载数据: {stock_full_code}")
             continue
 
         # 新数据
@@ -319,31 +319,31 @@ def import_to_db(_ctx: click.Context,
             try:
                 result, old_record_dict = SLBDetail.upsert(new_record)
                 if verbose:
-                    CONSOLE.print(f"📝 {stock_full_code}: {result}")
+                    _CSL.print(f"📝 {stock_full_code}: {result}")
             except Exception as e:
                 E(f"入库失败: {e}", **new_record)
                 import traceback
                 traceback.print_exc()
 
     # 显示统计结果
-    CONSOLE.print("\n📊 入库统计结果:")
-    CONSOLE.print(f"   无操作: {len(codes_classify['无操作'])} 只")
-    CONSOLE.print(f"   利空: {len(codes_classify['利空'])} 只")
-    CONSOLE.print(f"   利好: {len(codes_classify['利好'])} 只")
-    CONSOLE.print(f"   数据变更: {len(codes_classify['数据变更'])} 只")
-    CONSOLE.print(f"   更新时间: {len(codes_classify['更新时间'])} 只")
-    CONSOLE.print(f"   新增记录: {len(codes_classify['新增记录'])} 只")
+    _CSL.print("\n📊 入库统计结果:")
+    _CSL.print(f"   无操作: {len(codes_classify['无操作'])} 只")
+    _CSL.print(f"   利空: {len(codes_classify['利空'])} 只")
+    _CSL.print(f"   利好: {len(codes_classify['利好'])} 只")
+    _CSL.print(f"   数据变更: {len(codes_classify['数据变更'])} 只")
+    _CSL.print(f"   更新时间: {len(codes_classify['更新时间'])} 只")
+    _CSL.print(f"   新增记录: {len(codes_classify['新增记录'])} 只")
 
     if test and verbose:
         if codes_classify['利空']:
-            CONSOLE.print("\n🔴 扫雷宝利空个股:")
+            _CSL.print("\n🔴 扫雷宝利空个股:")
             for code in codes_classify['利空']:
-                CONSOLE.print(f"   {code.full_code}")
+                _CSL.print(f"   {code.full_code}")
 
         if codes_classify['利好']:
-            CONSOLE.print("\n🟢 扫雷宝利好个股:")
+            _CSL.print("\n🟢 扫雷宝利好个股:")
             for code in codes_classify['利好']:
-                CONSOLE.print(f"   {code.full_code}")
+                _CSL.print(f"   {code.full_code}")
 
 # --------------------------------------------------------------------------------
 # 生成自定义序列文件命令
@@ -360,8 +360,8 @@ def generate_diy_files(_ctx: click.Context,
                        verbose: bool):
     """生成【自定义序列(字符串,数值)】和【自定义序列(日期,数值)】文件"""
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     if date is None:
         date = datetime.now()
@@ -371,20 +371,20 @@ def generate_diy_files(_ctx: click.Context,
     DEFAULT_OUTPUT_FOLDER = SLBFileManager.generate_dirname(BELONG_TRADING_DATE)
 
     # 读取扫雷宝基础目录配置
-    SLB_BASE_DIR = Path(CFG['slb']['base_dir'])
+    SLB_BASE_DIR = Path(_CFG['slb']['base_dir'])
     output_dir = SLB_BASE_DIR / DEFAULT_OUTPUT_FOLDER
 
     # 初始化数据库
-    if not init_database(db_type, CFG, verbose):
+    if not init_database(db_type, _CFG, verbose):
         return
 
     # 【自定义序列(字符串,数值)】
-    diy_filename = CFG['slb']['user_diy_data']
+    diy_filename = _CFG['slb']['user_diy_data']
     diy_filepath = output_dir / diy_filename
 
     # 【自定义序列(日期,数值)】文件
     trading_date_str = BELONG_TRADING_DATE.strftime("%Y%m%d")
-    diy_daily_filename = CFG['slb']['user_diy_data_by_date']
+    diy_daily_filename = _CFG['slb']['user_diy_data_by_date']
 
     # 处理转义字符
     if '{date}' in diy_daily_filename:
@@ -392,16 +392,16 @@ def generate_diy_files(_ctx: click.Context,
 
     diy_daily_filepath = output_dir / diy_daily_filename
 
-    CONSOLE.print(f"📁 输出目录: {output_dir}")
-    CONSOLE.print(f"📄 自定义序列文件: {diy_filename}")
-    CONSOLE.print(f"📅 每日自定义序列文件: {diy_daily_filename}")
+    _CSL.print(f"📁 输出目录: {output_dir}")
+    _CSL.print(f"📄 自定义序列文件: {diy_filename}")
+    _CSL.print(f"📅 每日自定义序列文件: {diy_daily_filename}")
 
     diy_lines = []
     diy_daily_lines = []
 
     # 检查文件是否已存在
     if diy_filepath.exists() and diy_daily_filepath.exists():
-        CONSOLE.print("✅ 自定义序列文件已存在，跳过生成")
+        _CSL.print("✅ 自定义序列文件已存在，跳过生成")
         return
 
     # 从数据库获取最新数据
@@ -409,7 +409,7 @@ def generate_diy_files(_ctx: click.Context,
         today_records = SLBDetail.get_all_latest_by_market(market_code=market)  # type: List[SLBDetail]
         market_int_in_str = ("0", "1")[market == 'SH']
 
-        CONSOLE.print(f"📊 {market} 市场: {len(today_records)} 只个股")
+        _CSL.print(f"📊 {market} 市场: {len(today_records)} 只个股")
 
         for record in today_records:
             slb_score = 100 - record.total_risk_score
@@ -428,17 +428,17 @@ def generate_diy_files(_ctx: click.Context,
     if not diy_filepath.exists():
         with open(diy_filepath, 'w', encoding='utf-8') as DIY_DATA_FILE:
             DIY_DATA_FILE.writelines(diy_lines)
-        CONSOLE.print(f"✅ 生成自定义序列文件: {diy_filename} ({len(diy_lines)} 只个股)")
+        _CSL.print(f"✅ 生成自定义序列文件: {diy_filename} ({len(diy_lines)} 只个股)")
     else:
-        CONSOLE.print(f"⚠️ 自定义序列文件已存在: {diy_filename}")
+        _CSL.print(f"⚠️ 自定义序列文件已存在: {diy_filename}")
 
     # 写入每日自定义序列文件
     if not diy_daily_filepath.exists():
         with open(diy_daily_filepath, 'w', encoding='utf-8') as DIY_DAILY_FILE:
             DIY_DAILY_FILE.writelines(diy_daily_lines)
-        CONSOLE.print(f"✅ 生成每日自定义序列文件: {diy_daily_filename} ({len(diy_daily_lines)} 只个股)")
+        _CSL.print(f"✅ 生成每日自定义序列文件: {diy_daily_filename} ({len(diy_daily_lines)} 只个股)")
     else:
-        CONSOLE.print(f"⚠️ 每日自定义序列文件已存在: {diy_daily_filename}")
+        _CSL.print(f"⚠️ 每日自定义序列文件已存在: {diy_daily_filename}")
 
 # --------------------------------------------------------------------------------
 # 清理文件命令
@@ -454,11 +454,11 @@ def clean_files(_ctx: click.Context,
 ):
     """清理扫雷宝数据文件"""
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     if not clean:
-        CONSOLE.print("请使用 --clean 参数来清理文件")
+        _CSL.print("请使用 --clean 参数来清理文件")
         return
 
     # 设置时间变量
@@ -467,28 +467,28 @@ def clean_files(_ctx: click.Context,
     DEFAULT_OUTPUT_FOLDER = SLBFileManager.generate_dirname(BELONG_TRADING_DATE)
 
     # 读取扫雷宝基础目录配置
-    SLB_BASE_DIR = Path(CFG['slb']['base_dir'])
+    SLB_BASE_DIR = Path(_CFG['slb']['base_dir'])
     output_dir = SLB_BASE_DIR / DEFAULT_OUTPUT_FOLDER
 
-    CONSOLE.print(f"⚠️ 准备删除目录中的所有json文件: {output_dir}")
+    _CSL.print(f"⚠️ 准备删除目录中的所有json文件: {output_dir}")
 
     # 获取所有json文件
     _, existed_json_files = walk(output_dir, include_extensions=".json", without_root_path=False)
 
     if not existed_json_files:
-        CONSOLE.print("✅ 目录中没有json文件")
+        _CSL.print("✅ 目录中没有json文件")
         return
 
-    CONSOLE.print(f"📄 找到 {len(existed_json_files)} 个json文件")
+    _CSL.print(f"📄 找到 {len(existed_json_files)} 个json文件")
 
     from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress
 
     for _, ejf in enumerate_with_progress(existed_json_files, task_name="删除扫雷宝文件"):
         os.remove(ejf)
         if verbose:
-            CONSOLE.print(f"🗑️ 删除: {os.path.basename(ejf)}")
+            _CSL.print(f"🗑️ 删除: {os.path.basename(ejf)}")
 
-    CONSOLE.print(f"✅ 已删除 {len(existed_json_files)} 个json文件")
+    _CSL.print(f"✅ 已删除 {len(existed_json_files)} 个json文件")
 
 # --------------------------------------------------------------------------------
 # 查询扫雷宝数据命令
@@ -503,8 +503,8 @@ def query_online(_ctx: click.Context,
           verbose: bool):
     """在线查询单个或多个股票的扫雷宝数据"""
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     # 设置时间变量
     NOW_DT = datetime.now()
@@ -512,16 +512,16 @@ def query_online(_ctx: click.Context,
     DEFAULT_OUTPUT_FOLDER = SLBFileManager.generate_dirname(BELONG_TRADING_DATE)
 
     # 读取扫雷宝基础目录配置
-    SLB_BASE_DIR = Path(CFG['slb']['base_dir'])
+    SLB_BASE_DIR = Path(_CFG['slb']['base_dir'])
     output_dir = SLB_BASE_DIR / DEFAULT_OUTPUT_FOLDER
 
     # 处理文件夹
     if not os.path.isdir(output_dir):
         os.mkdir(output_dir)
-        CONSOLE.print(f"✅ 创建输出目录: {output_dir}")
+        _CSL.print(f"✅ 创建输出目录: {output_dir}")
 
     for stock in stocks:
-        CONSOLE.print(f"\n🔍 查询股票: {stock}")
+        _CSL.print(f"\n🔍 查询股票: {stock}")
 
         try:
             result = fetch_tdx_json(stock)
@@ -534,18 +534,18 @@ def query_online(_ctx: click.Context,
             stock_name = result.get('name', '(未知股票)')
             risk_count = result.get('num', 0)
 
-            CONSOLE.print(f"📊 股票名称: {stock_name}")
-            CONSOLE.print(f"📈 风险总分: {total_fs}")
-            CONSOLE.print(f"📉 风险项数量: {risk_count}")
-            CONSOLE.print(f"🏆 扫雷宝评分: {100 - total_fs}")
+            _CSL.print(f"📊 股票名称: {stock_name}")
+            _CSL.print(f"📈 风险总分: {total_fs}")
+            _CSL.print(f"📉 风险项数量: {risk_count}")
+            _CSL.print(f"🏆 扫雷宝评分: {100 - total_fs}")
 
             # 显示风险分类
             if verbose and 'data' in result:
-                CONSOLE.print("\n📋 风险分类:")
+                _CSL.print("\n📋 风险分类:")
                 for category in result['data']:
                     category_name = category.get('name', '未知分类')
                     category_risk_count = len([item for item in category.get('rows', []) if item.get('trig') == 1])
-                    CONSOLE.print(f"   {category_name}: {category_risk_count} 项")
+                    _CSL.print(f"   {category_name}: {category_risk_count} 项")
 
             if save:
                 json_filename = f'SLB.{SecurityCode(stock).full_code}.json'
@@ -554,9 +554,9 @@ def query_online(_ctx: click.Context,
 
                 with open(json_filepath, 'w', encoding='utf-8') as F:
                     F.write(json_str)
-                CONSOLE.print(f"💾 保存到文件: {json_filename}")
+                _CSL.print(f"💾 保存到文件: {json_filename}")
         else:
-            CONSOLE.print(f"❌ 无法获取股票JSON数据: {stock}")
+            _CSL.print(f"❌ 无法获取股票JSON数据: {stock}")
 
 # --------------------------------------------------------------------------------
 # 数据库查询命令
@@ -599,8 +599,8 @@ def query_db(_ctx: click.Context,
              verbose: bool):
     """从数据库查询扫雷宝数据"""
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     if date is None:
         when = datetime.now()
@@ -610,28 +610,28 @@ def query_db(_ctx: click.Context,
     markets = ALL_MARKET_LIST if 'ALL' in markets else []
     
     # 初始化数据库
-    if not init_database(db_type, CFG, verbose):
+    if not init_database(db_type, _CFG, verbose):
         return
     
     if stocks:
         for stock_code in stocks:
             code = SecurityCode(stock_code)
-            CONSOLE.print(f"\n🔍 深度分析个股: [bold cyan]{code.full_code}[/bold cyan]")
+            _CSL.print(f"\n🔍 深度分析个股: [bold cyan]{code.full_code}[/bold cyan]")
             
             # 获取该股票所有历史记录（按时间倒序）
             records = SLBDetail.get_all_by_code(code)
             if not records:
-                CONSOLE.print("⚠️ 数据库中无该股票记录")
+                _CSL.print("⚠️ 数据库中无该股票记录")
                 continue
                 
             # 展示最新记录
             latest = records[0]
-            CONSOLE.print(f"   最新记录: {latest.created_at} | 评分: {100 - latest.total_risk_score}")
+            _CSL.print(f"   最新记录: {latest.created_at} | 评分: {100 - latest.total_risk_score}")
             
             # 如果开启 verbose，自动进行逐条差异对比
             if verbose and len(records) > 1:
                 for i in range(1, len(records)):
-                    CONSOLE.print(f"   🔄 对比 {records[i].created_at} vs {records[i-1].created_at}:")
+                    _CSL.print(f"   🔄 对比 {records[i].created_at} vs {records[i-1].created_at}:")
                     SLBDetail.show_differences(
                         records[i].to_dict(exclude_keys=['risk_data']),
                         records[i-1].to_dict(exclude_keys=['risk_data'])
@@ -648,13 +648,13 @@ def query_db(_ctx: click.Context,
                 detail.ExchangeID = market_code
                 updated_count += 1
 
-        CONSOLE.print(f"✅ 成功更新 {updated_count} 条记录的ExchangeID")
+        _CSL.print(f"✅ 成功更新 {updated_count} 条记录的ExchangeID")
         return
 
     # ---------- 列出市场代码 ----------
     if list_markets:
         _markets = SLBDetail.get_markets_list(when)
-        CONSOLE.print(f"📊 市场列表 ({when.strftime('%Y-%m-%d')}): {_markets}")
+        _CSL.print(f"📊 市场列表 ({when.strftime('%Y-%m-%d')}): {_markets}")
         return
 
     # ---------- 按市场查询 ----------
@@ -670,10 +670,10 @@ def query_db(_ctx: click.Context,
         else:
             for _m in markets:
                 records.extend(SLBDetail.get_all_latest_by_market(_m, when))
-        CONSOLE.print(f"📊 市场 {markets} 找到 {len(records)} 条记录")
+        _CSL.print(f"📊 市场 {markets} 找到 {len(records)} 条记录")
         if verbose:
             for i, r in enumerate(records):
-                CONSOLE.print(f"  {i}. {r.ExchangeID}.{r.InstrumentID} {r.name} 风险:{r.total_risk_score}")
+                _CSL.print(f"  {i}. {r.ExchangeID}.{r.InstrumentID} {r.name} 风险:{r.total_risk_score}")
         return
 
     # ---------- 按分数区间查询 ----------
@@ -690,26 +690,26 @@ def query_db(_ctx: click.Context,
     if lower >= 0 and upper >= 0:
         records = SLBDetail.get_latest_with_score_range((lower, upper), when)
         if records:
-            CONSOLE.print(f"📊 风险分 [{lower},{upper}) 区间：共 {len(records)} 只个股")
+            _CSL.print(f"📊 风险分 [{lower},{upper}) 区间：共 {len(records)} 只个股")
             display = records[:limit] if limit > 0 else records
             for i, r in enumerate(display):
-                CONSOLE.print(f"  {i}. {r.ExchangeID}.{r.InstrumentID} {r.name} 风险:{r.total_risk_score} 评分:{100-r.total_risk_score}")
+                _CSL.print(f"  {i}. {r.ExchangeID}.{r.InstrumentID} {r.name} 风险:{r.total_risk_score} 评分:{100-r.total_risk_score}")
             if len(records) > len(display):
-                CONSOLE.print(f"  ... 还有 {len(records)-len(display)} 条")
+                _CSL.print(f"  ... 还有 {len(records)-len(display)} 条")
         else:
-            CONSOLE.print("❌ 没有找到符合条件的记录")
+            _CSL.print("❌ 没有找到符合条件的记录")
         return
 
     # ---------- 查询全市场最新 ----------
     if all_flag or latest_flag:
         records = SLBDetail.get_latest(when)
-        CONSOLE.print(f"📊 共找到 {len(records)} 只个股 (when={when.strftime('%Y-%m-%d')})")
+        _CSL.print(f"📊 共找到 {len(records)} 只个股 (when={when.strftime('%Y-%m-%d')})")
         if verbose:
             for i, r in enumerate(records[:limit] if limit > 0 else records):
-                CONSOLE.print(f"  {i}. {r.ExchangeID}.{r.InstrumentID} {r.name} 风险:{r.total_risk_score}")
+                _CSL.print(f"  {i}. {r.ExchangeID}.{r.InstrumentID} {r.name} 风险:{r.total_risk_score}")
         return
 
-    CONSOLE.print("❌ 请指定查询条件（--market, --slb-range, --risk-range, --all 等）")
+    _CSL.print("❌ 请指定查询条件（--market, --slb-range, --risk-range, --all 等）")
 
 # --------------------------------------------------------------------------------
 # --------------------------------------------------------------------------------
@@ -724,19 +724,18 @@ def migrate_db(_ctx: click.Context,
                pg_to_sqlite: bool,
                verbose: bool):
     """迁移扫雷宝数据（SQLite <-> PostgreSQL）"""
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     if not sqlite_to_pg and not pg_to_sqlite:
-        CONSOLE.print("请指定迁移方向：--sqlite-to-pg 或 --pg-to-sqlite")
+        _CSL.print("请指定迁移方向：--sqlite-to-pg 或 --pg-to-sqlite")
         return
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
-
-    sqlite_cfg = CFG.get('sqlite', {})
-    pg_cfg = CFG.get('postgresql', {})
+    sqlite_cfg = _CFG.get('sqlite', {})
+    pg_cfg = _CFG.get('postgresql', {})
 
     if not sqlite_cfg or not pg_cfg:
-        CONSOLE.print("❌ 配置文件必须同时包含 sqlite 和 postgresql 的连接配置")
+        _CSL.print("❌ 配置文件必须同时包含 sqlite 和 postgresql 的连接配置")
         return
 
     from sqlalchemy import create_engine
@@ -744,21 +743,21 @@ def migrate_db(_ctx: click.Context,
 
     try:
         if sqlite_to_pg:
-            CONSOLE.print("--- 从 SQLite 迁移到 PostgreSQL ---")
+            _CSL.print("--- 从 SQLite 迁移到 PostgreSQL ---")
             pg_url = generate_engine_url_str(**pg_cfg)
             sqlite_url = generate_engine_url_str(**sqlite_cfg)
             SLBDetail.init_db(pg_url)
             sync_data_with_raw_sql(create_engine(sqlite_url), SLBDetail)
-            CONSOLE.print("✅ 迁移完成")
+            _CSL.print("✅ 迁移完成")
         elif pg_to_sqlite:
-            CONSOLE.print("--- 从 PostgreSQL 迁移到 SQLite ---")
+            _CSL.print("--- 从 PostgreSQL 迁移到 SQLite ---")
             pg_url = generate_engine_url_str(**pg_cfg)
             sqlite_url = generate_engine_url_str(**sqlite_cfg)
             SLBDetail.init_db(sqlite_url)
             sync_data_with_raw_sql(create_engine(pg_url), SLBDetail)
-            CONSOLE.print("✅ 迁移完成")
+            _CSL.print("✅ 迁移完成")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 # --------------------------------------------------------------------------------
 # 风险分析图命令（slb_detail.py 的 --risk-plot）
@@ -777,21 +776,21 @@ def plot_risk(_ctx: click.Context,
               detailed: bool):
     """生成扫雷宝风险分析图"""
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
-    if not init_database(db_type, CFG):
+    if not init_database(db_type, _CFG):
         return
 
     if detailed:
         SLBDetail.plot_detailed_score_analysis(save_path=save_path or 'detailed_analysis.png')
-        CONSOLE.print(f"✅ 详细分析报告已保存: {save_path or 'detailed_analysis.png'}")
+        _CSL.print(f"✅ 详细分析报告已保存: {save_path or 'detailed_analysis.png'}")
     elif high_risk:
         SLBDetail.plot_score_distribution((30, 100), save_path=save_path or 'high_risk_stocks.png')
-        CONSOLE.print(f"✅ 高风险股票分布图已保存: {save_path or 'high_risk_stocks.png'}")
+        _CSL.print(f"✅ 高风险股票分布图已保存: {save_path or 'high_risk_stocks.png'}")
     else:
         SLBDetail.plot_score_distribution(save_path=save_path or 'risk_score_distribution.png')
-        CONSOLE.print(f"✅ 风险分数分布图已保存: {save_path or 'risk_score_distribution.png'}")
+        _CSL.print(f"✅ 风险分数分布图已保存: {save_path or 'risk_score_distribution.png'}")
 
 # --------------------------------------------------------------------------------
 # 统计更新数量命令（slb_detail.py 的 --count）
@@ -808,13 +807,13 @@ def count_updates(_ctx: click.Context,
                   verbose: bool):
     """统计指定日期后的扫雷宝更新数量"""
 
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     if date is None:
         date = datetime.now()
 
-    if not init_database(db_type, CFG, verbose):
+    if not init_database(db_type, _CFG, verbose):
         return
 
     belong_trading_date = calc_belong_trading_day(date, datetime_time(hour=15))
@@ -822,10 +821,10 @@ def count_updates(_ctx: click.Context,
 
     records = SLBDetail.get_all_created_later(交易日收盘时间)
 
-    CONSOLE.print(f"📊 统计 {belong_trading_date.strftime('%Y-%m-%d')} 收盘后更新记录：")
+    _CSL.print(f"📊 统计 {belong_trading_date.strftime('%Y-%m-%d')} 收盘后更新记录：")
 
     if records:
-        CONSOLE.print(f"✅ 收盘后更新: {len(records)} 条")
+        _CSL.print(f"✅ 收盘后更新: {len(records)} 条")
         if verbose:
             from difoss_stock_util.rich_util.fixed_progress_simple_v2_Qwen3Max import enumerate_with_progress
             for i, record in enumerate_with_progress(records, task_name="分析变更"):
@@ -833,12 +832,12 @@ def count_updates(_ctx: click.Context,
                     SecurityCode(record.InstrumentID, record.ExchangeID),
                     when=(record.created_at - timedelta(minutes=1)))
                 if old_record:
-                    CONSOLE.print(f"\n  {i}. {record.ExchangeID}.{record.InstrumentID} {record.name}:")
+                    _CSL.print(f"\n  {i}. {record.ExchangeID}.{record.InstrumentID} {record.name}:")
                     SLBDetail.show_differences(
                         old_record.to_dict(exclude_keys=['risk_data']),
                         record.to_dict(exclude_keys=['risk_data']))
     else:
-        CONSOLE.print("📭 暂无更新记录")
+        _CSL.print("📭 暂无更新记录")
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -854,23 +853,23 @@ def archive(_ctx: click.Context,
     """每日归档：自动下载、入库并生成自定义序列文件
     归档流程的核心逻辑：下载 -> 入库 -> 生成序列"""
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
     markets = ALL_MARKET_LIST if 'ALL' in markets else []
 
-    CONSOLE.print(f"[bold cyan]开始执行全网归档任务...[/bold cyan]")
+    _CSL.print(f"[bold cyan]开始执行全网归档任务...[/bold cyan]")
 
     # 1. 下载（调用现有 download 逻辑完成）
-    CONSOLE.print("[yellow]开始下载扫雷宝详情文件...[/yellow]")
+    _CSL.print("[yellow]开始下载扫雷宝详情文件...[/yellow]")
     _ctx.invoke(download, markets=markets, save=True, verbose=False, quick=True)
 
     # 2. 入库（调用现有 import_to_db 逻辑完成）
-    CONSOLE.print("[yellow]对最新下载的文件进行入库...[/yellow]")
+    _CSL.print("[yellow]对最新下载的文件进行入库...[/yellow]")
     _ctx.invoke(import_to_db, db_type=db_type, date=None, test=test, verbose=False, debug=False)
 
     # 3. 生成序列文件
-    CONSOLE.print("[yellow]正在生成自定义序列文件...[/yellow]")
+    _CSL.print("[yellow]正在生成自定义序列文件...[/yellow]")
     _ctx.invoke(generate_diy_files, db_type=db_type, date=None, verbose=False)
 
-    CONSOLE.print("[bold green]归档任务完成！[/bold green]")
+    _CSL.print("[bold green]归档任务完成！[/bold green]")
 

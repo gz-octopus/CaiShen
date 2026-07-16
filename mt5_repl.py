@@ -73,21 +73,20 @@ def symbols_get(_ctx: click.Context,
                 **kwargs,
 ):
     """列出所有交易品种（及数量）"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
     symbols = mt5.symbols_get(group=group)
     if not symbols:
-        CONSOLE.print("未获取到任何交易品种，可能是连接问题或分组名称错误。")
+        _CSL.print("未获取到任何交易品种，可能是连接问题或分组名称错误。")
         return
     
     if verbose:
-        CONSOLE.print(f"📖 symbols_get(group='{group}') 返回: {symbols}")
-
+        _CSL.print(f"📖 symbols_get(group='{group}') 返回: {symbols}")
     print(f"总品种数: {len(symbols)}")
 
     if contains:
         symbols = [s for s in symbols if any(c in s.name for c in contains)]
-        CONSOLE.print(f"过滤后品种数: {len(symbols)}")
+        _CSL.print(f"过滤后品种数: {len(symbols)}")
 
 
     # 使用装饰器注入的 helper 来处理 list[dict] 的字段筛选/翻译
@@ -98,8 +97,8 @@ def symbols_get(_ctx: click.Context,
     if list_field_filter:
         symbol_dicts = list_field_filter(symbol_dicts)
 
-    CONSOLE.print(f"交易品种列表{'（过滤后）' if contains else ''}:", end='')
-    CONSOLE.print(Pretty(symbol_dicts, max_length=max_to_show) if (symbol_dicts and max_to_show > 0) else symbol_dicts)
+    _CSL.print(f"交易品种列表{'（过滤后）' if contains else ''}:", end='')
+    _CSL.print(Pretty(symbol_dicts, max_length=max_to_show) if (symbol_dicts and max_to_show > 0) else symbol_dicts)
 
     return symbols
 
@@ -118,14 +117,14 @@ def fetch_deep_history(
     is_save: bool,
 ):
     """获取历史数据"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     
     period = period.upper()
 
     timeframe = _timeframe_str2int(period)
 
     if not timeframe:
-        CONSOLE.print("⚠️ [red]周期不能为空[/red]")
+        _CSL.print("⚠️ [red]周期不能为空[/red]")
         return
 
     # 2. 激活品种
@@ -136,7 +135,7 @@ def fetch_deep_history(
         start_index = 0
         chunk_size = min(1000, count)  # 每次最多拉取 1000 条
 
-        CONSOLE.print(f"开始分页拉取 {symbol} 历史数据...")
+        _CSL.print(f"开始分页拉取 {symbol} 历史数据...")
 
         while start_index < count:
             # copy_rates_from_pos(品种, 周期, 起始索引, 数量)
@@ -144,7 +143,7 @@ def fetch_deep_history(
             rates = mt5.copy_rates_from_pos(symbol, timeframe, start_index, chunk_size)
 
             if rates is None or len(rates) == 0:
-                CONSOLE.print(f"⚠️ 在索引 {start_index} 处无法获取更多数据，可能已达服务器上限。")
+                _CSL.print(f"⚠️ 在索引 {start_index} 处无法获取更多数据，可能已达服务器上限。")
                 break
 
             df_chunk = pd.DataFrame(rates)
@@ -152,7 +151,7 @@ def fetch_deep_history(
 
             # 打印进度
             current_earliest = pd.to_datetime(df_chunk['time'].min(), unit='s')
-            CONSOLE.print(f"已拉取索引 [{start_index} 至 {start_index + len(rates)}]，最远到达: {current_earliest}")
+            _CSL.print(f"已拉取索引 [{start_index} 至 {start_index + len(rates)}]，最远到达: {current_earliest}")
 
             # 增加起始位置，准备拉取更老的数据
             start_index += len(rates)
@@ -167,7 +166,7 @@ def fetch_deep_history(
 
         # 3. 合并数据
         if not all_chunks:
-            CONSOLE.print("⚠️ 未获取到任何数据")
+            _CSL.print("⚠️ 未获取到任何数据")
             return
 
         df = pd.concat(all_chunks)
@@ -181,9 +180,9 @@ def fetch_deep_history(
         df = df.drop_duplicates(subset=['time']).sort_values('time')
         df.set_index('time', inplace=True)
 
-        CONSOLE.print(f"🍾 获取成功")
-        CONSOLE.print(f"总条数: {len(df)}")
-        CONSOLE.print(f"时间跨度: {df.index.min()} 至 {df.index.max()}")
+        _CSL.print(f"🍾 获取成功")
+        _CSL.print(f"总条数: {len(df)}")
+        _CSL.print(f"时间跨度: {df.index.min()} 至 {df.index.max()}")
         print_dataframe(df, title=f"{symbol} 数据（周期:{period}）", )
         
         if is_save:
@@ -191,7 +190,7 @@ def fetch_deep_history(
             time_range_str4fn = f"{df.index.min()}→{df.index.max()}".replace(' ', '_').replace(':','')
             output_path = f"{time_range_str4fn}_{symbol}_{period}.parquet"
             df.to_parquet(output_path, engine='pyarrow', compression='snappy')
-            CONSOLE.print(f"💾 数据已存至: {output_path}")
+            _CSL.print(f"💾 数据已存至: {output_path}")
 
 
 # ======================
@@ -203,13 +202,13 @@ def _example(_ctx: click.Context,
     stocks: list[str]
 ):
     """"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for full_code in stocks:
             # TODO:
-            CONSOLE.print(f"{full_code} :", )
+            _CSL.print(f"{full_code} :", )
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # --------------------------------------------------------------------------------

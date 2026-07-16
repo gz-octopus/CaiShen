@@ -429,13 +429,13 @@ def refresh_cache(_ctx: click.Context):
     """刷新行情缓存
     刷新后5分钟内取最新report和k线数据不会触发刷新
     """
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         result = tq.refresh_cache()
-        CONSOLE.print(f"✅ 缓存刷新成功, result: {result}")
+        _CSL.print(f"✅ 缓存刷新成功, result: {result}")
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -448,12 +448,12 @@ def refresh_kline(_ctx: click.Context, stocks: list[str], period: str):
     """
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.refresh_kline(stock_list=stocks, period=period)
-        CONSOLE.print(res)
+        _CSL.print(res)
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -467,7 +467,7 @@ def send_bt_data(_ctx: click.Context,
                  data_list: list[str],
                  ):
     """往客户端发送指定股票的回测数据"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for full_code in stocks:
             bt_data = tq.send_bt_data(stock_code=full_code,
@@ -475,9 +475,9 @@ def send_bt_data(_ctx: click.Context,
                                     data_list=[d.split('|') for d in data_list],
                                     count=len(data_list)),
 
-            CONSOLE.print(f"发送 {full_code} 的回测数据，返回: {bt_data}")
+            _CSL.print(f"发送 {full_code} 的回测数据，返回: {bt_data}")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 def _categorize_securities(data: list[dict]) -> pd.DataFrame:
@@ -510,16 +510,16 @@ def _categorize_securities(data: list[dict]) -> pd.DataFrame:
 @click.pass_context
 def get_match_stkinfo(_ctx: click.Context, key_word: str):
     """检索证券信息"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.get_match_stkinfo(key_word)
         if not res:
-            CONSOLE.print(f'关键字 [yellow]{key_word}[/yellow]，查无数据')
+            _CSL.print(f'关键字 [yellow]{key_word}[/yellow]，查无数据')
             return
         display_df = _categorize_securities(res)
         print_dataframe(display_df, title=f'含有 [yellow]{key_word}[/yellow] 的证券信息')
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # todo:
@@ -564,8 +564,8 @@ def get_market_data(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
-    CFG = _ctx.obj['cfg'] # type: dict
+    _CSL = _ctx.obj['console'] # type: Console
+    _CFG = _ctx.obj['cfg'] # type: dict
 
     try:
         dict_df = tq.get_market_data(
@@ -580,11 +580,11 @@ def get_market_data(_ctx: click.Context,
         ) # type: Dict[str, pd.DataFrame]
 
         if verbose:
-            CONSOLE.print(f"{dict(stock_list=stocks, typeOfres=type(dict_df), res=dict_df)}")
+            _CSL.print(f"{dict(stock_list=stocks, typeOfres=type(dict_df), res=dict_df)}")
 
         if dict_df and len(dict_df) > 0:
             if period == 'tick':
-                CONSOLE.print(f"df: {dict_df}")
+                _CSL.print(f"df: {dict_df}")
                 return
 
             # DEBUG:
@@ -598,19 +598,19 @@ def get_market_data(_ctx: click.Context,
                 if not cache_df:
                     # 保存到 df 中，就不打印了
                     print_dataframe(stock_df, title=f"股票数据 {code} （{period}）K线数据",
-                                    show_footer=True, printer=CONSOLE.print)
+                                    show_footer=True, printer=_CSL.print)
                 if is_save_db:
-                    _save_to_db(stock_df, code, 'history_data_1d', CONSOLE, CFG, db_type=DB_TYPE)
+                    _save_to_db(stock_df, code, 'history_data_1d', _CSL, _CFG, db_type=DB_TYPE)
 
             _dt_map = {'none': 0, 'front': 1, 'back': 2}
             return {'dfs': stock_2_df, '_source': 'market_data',
                     'period': period, 'dividend_type': _dt_map.get(dividend_type, 1)}
 
         else:
-            CONSOLE.print("[red]❎ 返回空数据[/red]")
+            _CSL.print("[red]❎ 返回空数据[/red]")
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 
@@ -843,14 +843,14 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
     print_locals()
     
     global DB_TYPE
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # ── 处理 --set-db-type ──
     if set_db_type:
         DB_TYPE = set_db_type
-        CONSOLE.print(f"✅ 全局默认数据库类型已设为: [yellow]{DB_TYPE}[/yellow]")
+        _CSL.print(f"✅ 全局默认数据库类型已设为: [yellow]{DB_TYPE}[/yellow]")
 
     # ── 解析 db_type ──
     if db_type is None:
@@ -859,12 +859,12 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
     # ── --list-stocks：列出表中所有股票代码 ──
     if list_stocks:
         if not table_name:
-            CONSOLE.print("[red]-ls 必须配合 -t 指定表名[/red]")
+            _CSL.print("[red]-ls 必须配合 -t 指定表名[/red]")
             return
         trading_date = calc_belong_trading_day(date + timedelta(seconds=1), dividing_line=datetime_time(0, 0, 0))
         trading_date_str = trading_date.strftime('%Y%m%d')
-        db_url = _assemble_db_url(db_type, CFG)
-        stocks = _query_table_stocks(db_url, table_name, CONSOLE, trading_date_str)
+        db_url = _assemble_db_url(db_type, _CFG)
+        stocks = _query_table_stocks(db_url, table_name, _CSL, trading_date_str)
         if cache_stocks or _is_pipe_producer:
             return {'stocks': stocks}
         return
@@ -873,14 +873,14 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
     pipe_data = _ctx.obj.get('_pipe_data', {})
     if not pipe_data:
         if not set_db_type:
-            CONSOLE.print("[red]无管道传入数据[/red]")
-            CONSOLE.print("用法示例: [yellow]gmd -c 100 -s 600000.SH | db -t history_data_1d[/yellow]")
+            _CSL.print("[red]无管道传入数据[/red]")
+            _CSL.print("用法示例: [yellow]gmd -c 100 -s 600000.SH | db -t history_data_1d[/yellow]")
         return
 
     dfs = pipe_data.get('dfs', {})
     if not dfs:
-        CONSOLE.print("[red]管道数据中未包含 DataFrame（缺少 'dfs' 键）[/red]")
-        CONSOLE.print(f"上游返回的键: {list(pipe_data.keys())}")
+        _CSL.print("[red]管道数据中未包含 DataFrame（缺少 'dfs' 键）[/red]")
+        _CSL.print(f"上游返回的键: {list(pipe_data.keys())}")
         return
 
     # ── 自动推断目标表名 ──
@@ -894,7 +894,7 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
             table_name = 'stock_metrics'  # 向后兼容：旧管道无 _source 但有 formula_key
         else:
             table_name = 'history_data_1d'
-        CONSOLE.print(f"[dim]根据管道来源自动选择表: [yellow]{table_name}[/yellow][/dim]")
+        _CSL.print(f"[dim]根据管道来源自动选择表: [yellow]{table_name}[/yellow][/dim]")
 
     # ── stock_metrics：公式指标 JSONB ──
     if table_name == 'stock_metrics':
@@ -902,27 +902,27 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
         dividend_type = pipe_data.get('dividend_type', 1)
         formula_key = pipe_data.get('formula_key', '')
         if not formula_key:
-            CONSOLE.print("[red]管道数据中缺少 formula_key，无法确定指标公式标识[/red]")
-            CONSOLE.print("提示: 请使用 [yellow]formula -t zb -n <公式名> ... | db -t stock_metrics[/yellow]")
+            _CSL.print("[red]管道数据中缺少 formula_key，无法确定指标公式标识[/red]")
+            _CSL.print("提示: 请使用 [yellow]formula -t zb -n <公式名> ... | db -t stock_metrics[/yellow]")
             return
-        db_url = _assemble_db_url(db_type, CFG)
+        db_url = _assemble_db_url(db_type, _CFG)
         StockMetrics.init_db(db_url)
         StockMetrics.bulk_upsert_from_dfs(dfs, formula_key, period, dividend_type,
-                                          db_url, is_replace, console=CONSOLE)
+                                          db_url, is_replace, console=_CSL)
         return
 
     # ── market_data：行情 K 线 JSONB ──
     if table_name == 'market_data':
         period = pipe_data.get('period', '1d')
         dividend_type = pipe_data.get('dividend_type', 1)
-        db_url = _assemble_db_url(db_type, CFG)
+        db_url = _assemble_db_url(db_type, _CFG)
         MarketData.init_db(db_url)
         MarketData.bulk_upsert_from_dfs(dfs, period, dividend_type,
-                                         db_url, is_replace, console=CONSOLE)
+                                         db_url, is_replace, console=_CSL)
         return
 
     # ── 其他表：走 ORM（如 history_data_1d）──
-    _save_kline_to_db_table(dfs, table_name, db_type, CFG, is_replace, CONSOLE)
+    _save_kline_to_db_table(dfs, table_name, db_type, _CFG, is_replace, _CSL)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -935,14 +935,14 @@ def get_market_snapshot(_ctx: click.Context,
     调用会触发客户端刷新数据，耗时过长请耐心等待
     总成交额为万位，其他无特殊说明均为个位
     """
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for stock in stocks:
             code = SecurityCode(stock.upper())
             market_snapshot = tq.get_market_snapshot(stock_code = code.full_code)
-            CONSOLE.print(f"{code.full_code} 的市场快照数据:", market_snapshot)
+            _CSL.print(f"{code.full_code} 的市场快照数据:", market_snapshot)
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -956,12 +956,12 @@ def get_stock_info(_ctx: click.Context,
     """获取基础财务数据（不需要下载专业财务数据）
     股本 资产 负债 利润 现金流量等数据均为万位
     """
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         return_fields = []
         for full_code in stocks:
             fdc = tq.get_stock_info(stock_code=full_code, field_list=fields)
-            CONSOLE.print(f"{full_code} 基础财务数据:", fdc)
+            _CSL.print(f"{full_code} 基础财务数据:", fdc)
 
             if (not return_fields) and fdc is not None and isinstance(fdc, dict):
                 return_fields = list(fdc.keys())
@@ -969,7 +969,7 @@ def get_stock_info(_ctx: click.Context,
         _show_return_fields_meaning(STOCK_INFO_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -987,7 +987,7 @@ def get_more_info(_ctx: click.Context,
     join_one_table: bool,
 ):
     """获取股票更多信息"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
     # 如果含有中文，则在说明中查找，否则在 key 中查找
     matched_fields = []
@@ -1003,15 +1003,15 @@ def get_more_info(_ctx: click.Context,
                 matched_fields.extend(_en_key)
 
         if not matched_fields:
-            CONSOLE.print(f"没有找到匹配的字段，无法列出字段意义")
+            _CSL.print(f"没有找到匹配的字段，无法列出字段意义")
             return
 
     if list_field:
         if matched_fields:
-            _show_return_fields_meaning(GMI_INFO_DATAFRAME, matched_fields, printer=CONSOLE.print)
+            _show_return_fields_meaning(GMI_INFO_DATAFRAME, matched_fields, printer=_CSL.print)
 
         else:
-            _show_return_fields_meaning(GMI_INFO_DATAFRAME, printer=CONSOLE.print)
+            _show_return_fields_meaning(GMI_INFO_DATAFRAME, printer=_CSL.print)
 
         return
 
@@ -1034,16 +1034,16 @@ def get_more_info(_ctx: click.Context,
             if join_one_table:
                 stocks_info_list.append(res)
             else:
-                CONSOLE.print(f"get_more_info({full_code} {get_stock_name(full_code)}): {res}")
+                _CSL.print(f"get_more_info({full_code} {get_stock_name(full_code)}): {res}")
 
         if join_one_table and stocks_info_list:
             df = pd.DataFrame(stocks_info_list, index=stocks)
-            print_dataframe(df, title="股票更多信息", show_footer=True, printer=CONSOLE.print)
+            print_dataframe(df, title="股票更多信息", show_footer=True, printer=_CSL.print)
 
         if return_fields:
             _show_return_fields_meaning(GMI_INFO_DATAFRAME, return_fields)
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1064,14 +1064,14 @@ def get_divide_factors(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for full_code in stocks:
             df = tq.get_divid_factors(stock_code=full_code, start_time=start_time, end_time=end_time)
             print_dataframe(df, title=f"{full_code} 分红配送数据",
-                            show_footer=True, printer=CONSOLE.print)
+                            show_footer=True, printer=_CSL.print)
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 
@@ -1094,15 +1094,15 @@ def get_gb_info(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         count = len(date_list)
         if count:
             for full_code in stocks:
                 res = tq.get_gb_info(stock_code=full_code, date_list=date_list, count=count)
-                CONSOLE.print(f"get_gb_info({full_code}): {res}")
+                _CSL.print(f"get_gb_info({full_code}): {res}")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 
@@ -1113,14 +1113,14 @@ def get_cb_info(_ctx: click.Context,
     stocks: list[str]
 ):
     """获取可转债基础数据"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for stock in stocks:
             code = SecurityCode(stock.upper())
             cb_info = tq.get_cb_info(stock_code = code.full_code)
-            CONSOLE.print(f"{code.full_code} {code.security_type.value} 的可转债基础数据:", cb_info)
+            _CSL.print(f"{code.full_code} {code.security_type.value} 的可转债基础数据:", cb_info)
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1135,15 +1135,15 @@ def get_ipo_info(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         ipo_info = tq.get_ipo_info(ipo_type, ipo_date)
 
         ipo_type_tip = '所有新股申购信息' if (ipo_type == 0) else '所有新发债信息'
         ipo_date_tip = '今天' if (ipo_date == 0) else '今天及以后'
-        CONSOLE.print(f"{ipo_date_tip}{ipo_type_tip}:", ipo_info)
+        _CSL.print(f"{ipo_date_tip}{ipo_type_tip}:", ipo_info)
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1170,7 +1170,7 @@ def get_financial_data(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         fn_data = tq.get_financial_data(
             stock_list=stocks,
@@ -1186,12 +1186,12 @@ def get_financial_data(_ctx: click.Context,
                 if not return_fields:
                     return_fields = df.columns.to_list()
                 print_dataframe(df, title=f"{full_code} 专业财务数据",
-                                printer=CONSOLE.print)
+                                printer=_CSL.print)
 
         _show_return_fields_meaning(FINANCIAL_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1215,10 +1215,10 @@ def get_gpjy_value(_ctx: click.Context,
 
     # return
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.get_gpjy_value(stocks, field_list, start_time, end_time)
-        CONSOLE.print(f"返回: ", res)
+        _CSL.print(f"返回: ", res)
 
         return_fields = []
         if res and len(res) > 0:
@@ -1229,7 +1229,7 @@ def get_gpjy_value(_ctx: click.Context,
         _show_return_fields_meaning(GPJY_VALUE_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1249,10 +1249,10 @@ def get_gpjy_value_by_date(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.get_gpjy_value_by_date(stocks, field_list, year, mmdd)
-        CONSOLE.print(f"返回: ", res)
+        _CSL.print(f"返回: ", res)
 
         return_fields = []
         if res and len(res) > 0:
@@ -1263,7 +1263,7 @@ def get_gpjy_value_by_date(_ctx: click.Context,
         _show_return_fields_meaning(GPJY_VALUE_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1285,10 +1285,10 @@ def get_bkjy_value(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.get_bkjy_value(stocks, field_list, start_time, end_time)
-        CONSOLE.print(f"返回: ", res)
+        _CSL.print(f"返回: ", res)
 
         return_fields = []
         if res and len(res) > 0:
@@ -1299,7 +1299,7 @@ def get_bkjy_value(_ctx: click.Context,
         _show_return_fields_meaning(BKJY_VALUE_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1319,10 +1319,10 @@ def get_bkjy_value_by_date(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.get_bkjy_value_by_date(stocks, field_list, year, mmdd)
-        CONSOLE.print(f"返回: ", res)
+        _CSL.print(f"返回: ", res)
 
         return_fields = []
         if res and len(res) > 0:
@@ -1333,7 +1333,7 @@ def get_bkjy_value_by_date(_ctx: click.Context,
         _show_return_fields_meaning(BKJY_VALUE_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1351,10 +1351,10 @@ def get_scjy_value(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.get_scjy_value(field_list, start_time, end_time)
-        CONSOLE.print(f"返回: ", res)
+        _CSL.print(f"返回: ", res)
 
         return_fields = []
         if res and len(res) > 0 and isinstance(res, dict):
@@ -1363,7 +1363,7 @@ def get_scjy_value(_ctx: click.Context,
         _show_return_fields_meaning(SCJY_VALUE_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1381,10 +1381,10 @@ def get_scjy_value_by_date(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.get_scjy_value_by_date(field_list, year, mmdd)
-        CONSOLE.print(f"返回: ", res)
+        _CSL.print(f"返回: ", res)
 
         return_fields = []
         if res and len(res) > 0 and isinstance(res, dict):
@@ -1393,7 +1393,7 @@ def get_scjy_value_by_date(_ctx: click.Context,
         _show_return_fields_meaning(SCJY_VALUE_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1409,10 +1409,10 @@ def get_gp_one_data(_ctx: click.Context,
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.get_gp_one_data(stocks, field_list) # type: dict[dict]
-        CONSOLE.print(f"返回: ", res)
+        _CSL.print(f"返回: ", res)
 
         return_fields = []
         if res and len(res) > 0:
@@ -1423,7 +1423,7 @@ def get_gp_one_data(_ctx: click.Context,
         _show_return_fields_meaning(GP_ONE_DATA_DATAFRAME, return_fields)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 # ---------------------------------------------------------------------------------------------
 # 分类/板块成份股
@@ -1443,7 +1443,7 @@ def get_sector_list(_ctx: click.Context,
     **kwargs
 ):
     """获取A股板块代码列表（通达信板块、概念、行业等88开头的板块）"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     # 管道模式：当本命令处于管道非末段（左侧/中间），后面有下游命令时，
     # 即使没有 -sm 也应该遍历板块获取成份股并返回，供下一段消费
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
@@ -1460,7 +1460,7 @@ def get_sector_list(_ctx: click.Context,
             mask = df['Name'].str.contains(pattern, na=False)
             df_filtered = df[mask].copy()
 
-            print_dataframe(df_filtered, title=f'含有 {contains} 的板块（{len(df_filtered)} / {len(df)}）', printer=CONSOLE.print)
+            print_dataframe(df_filtered, title=f'含有 {contains} 的板块（{len(df_filtered)} / {len(df)}）', printer=_CSL.print)
 
             if cache_stocks or is_verbose or _is_pipe_producer:
                 stocks_in_filtered_sectors = set()
@@ -1472,8 +1472,8 @@ def get_sector_list(_ctx: click.Context,
                     res = tq.get_stock_list_in_sector(block_code=sector_code, block_type=0, list_type=1)
 
                     if is_verbose:
-                        CONSOLE.print(f"板块 [yellow]{sector_code}[/yellow] ({row['Name']}) 中含有 {len(res)} 只个股：", end='')
-                        CONSOLE.print([f"{r.get('Code')}|{r.get('Name')}" for r in res if isinstance(r, dict)])
+                        _CSL.print(f"板块 [yellow]{sector_code}[/yellow] ({row['Name']}) 中含有 {len(res)} 只个股：", end='')
+                        _CSL.print([f"{r.get('Code')}|{r.get('Name')}" for r in res if isinstance(r, dict)])
 
                     if (cache_stocks or _is_pipe_producer) and res:
                         stocks_in_filtered_sectors.update([_get(x) for x in res if x])
@@ -1485,10 +1485,10 @@ def get_sector_list(_ctx: click.Context,
         else:
             if _is_pipe_producer:
                 return {'blocks': set(df['Code'].tolist())}
-            print_dataframe(df, title='板块列表（全量）', print=CONSOLE.print)
+            print_dataframe(df, title='板块列表（全量）', print=_CSL.print)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -1541,7 +1541,7 @@ def get_stock_list_in_sector(
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     try:
@@ -1549,8 +1549,8 @@ def get_stock_list_in_sector(
         res = tq.get_stock_list_in_sector(block_code=block_name,
                                         block_type=block_type,
                                         list_type=list_type)
-        CONSOLE.print(f"板块 [yellow]{block_name}[/yellow] 中含有 {len(res)} 只个股：", end='')
-        CONSOLE.print(Pretty(res, max_length=max_to_show) if (res and max_to_show > 0) else res)
+        _CSL.print(f"板块 [yellow]{block_name}[/yellow] 中含有 {len(res)} 只个股：", end='')
+        _CSL.print(Pretty(res, max_length=max_to_show) if (res and max_to_show > 0) else res)
 
         if cache_stocks or _is_pipe_producer:
             if res and isinstance(res, list):
@@ -1559,7 +1559,7 @@ def get_stock_list_in_sector(
             return {'stocks': stocks_result}
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 _MARKET_2_NAME = {
@@ -1635,17 +1635,17 @@ def get_stocks(_ctx: click.Context,
 ):
     """获取系统分类成份股（通过指定 市场代码 或 市场名称）"""
     print_locals()
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     try:
         if not (markets or market_name_contains) or list_all:
-            print_dataframe(_MARKET_NAME_DF, title="市场代码-名称对应表", printer=CONSOLE.print)
+            print_dataframe(_MARKET_NAME_DF, title="市场代码-名称对应表", printer=_CSL.print)
             return
 
         if market_name_contains:
             df_filtered = check_text_in_column(_MARKET_NAME_DF, '市场名称', market_name_contains)
-            print_dataframe(df_filtered, title=f"含有{market_name_contains}的市场", printer=CONSOLE.print)
+            print_dataframe(df_filtered, title=f"含有{market_name_contains}的市场", printer=_CSL.print)
             return
 
         if markets:
@@ -1671,11 +1671,11 @@ def get_stocks(_ctx: click.Context,
                         if stock_name_contains:
                             res = [x for x in res if any(contain_str in x.get('Name', '') for contain_str in stock_name_contains)]
 
-                            CONSOLE.print(f"市场【代码：{market} 名称：{market_name}】 共 {old_len} 只个股，筛选后剩余 {len(res)} 只：", end='')
+                            _CSL.print(f"市场【代码：{market} 名称：{market_name}】 共 {old_len} 只个股，筛选后剩余 {len(res)} 只：", end='')
                         else:
-                            CONSOLE.print(f"市场【代码：{market} 名称：{market_name}】 共 {len(res)} 只个股：", end='')
+                            _CSL.print(f"市场【代码：{market} 名称：{market_name}】 共 {len(res)} 只个股：", end='')
 
-                        CONSOLE.print(Pretty(res, max_length=max_to_show) if max_to_show > 0 else res)
+                        _CSL.print(Pretty(res, max_length=max_to_show) if max_to_show > 0 else res)
 
                         if (cache_stocks or _is_pipe_producer) and isinstance(res, list):
                             stocks_result.update([_get(x) for x in res if x])
@@ -1685,7 +1685,7 @@ def get_stocks(_ctx: click.Context,
                 return {'stocks': stocks_result}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1725,7 +1725,7 @@ def stock_block_stat(_ctx: click.Context,
         gs -m 自选股 | sbs                         # 管道：自选股 → 板块统计
         gsl -c 华为 | sbs                          # 管道：概念板块个股 → 板块统计
     """
-    CONSOLE = _ctx.obj['console']  # type: Console
+    _CSL = _ctx.obj['console']  # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # 确定交易日期
@@ -1742,7 +1742,7 @@ def stock_block_stat(_ctx: click.Context,
     try:
         stocks_list = list(stocks)
         if not stocks_list:
-            CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
+            _CSL.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
             return
 
         # ── Step 1: 获取 K 线数据，计算每只个股的涨幅 ──
@@ -1862,26 +1862,26 @@ def stock_block_stat(_ctx: click.Context,
         block_stats.sort(key=lambda x: x['个股数'], reverse=True)
         df_stats = pd.DataFrame(block_stats)
 
-        CONSOLE.print(f"\n[bold]📊 板块归属统计[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
+        _CSL.print(f"\n[bold]📊 板块归属统计[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
                       f"个股: [yellow]{len(stocks_list)}[/yellow] 只，"
                       f"涉及板块: [yellow]{len(block_2_infos.keys())}[/yellow] 个")
         print_dataframe(df_stats.head(max_to_show),
                         title=f"板块聚合（按个股数降序，前 {min(max_to_show, len(df_stats))} 条）",
-                        show_footer=True, printer=CONSOLE.print,
+                        show_footer=True, printer=_CSL.print,
                         sum_cols=['个股数', '涨(家)', '涨停', '跌(家)', '跌停', '主买净额(亿)', '主力净额(亿)'],
                         avg_cols=['均涨幅%', '换手率%', '量比'])
 
         if is_verbose:
             df_detail = pd.DataFrame(stock_details)
             print_dataframe(df_detail, title="个股详情",
-                            show_footer=True, printer=CONSOLE.print)
+                            show_footer=True, printer=_CSL.print)
 
         # ── 管道返回 ──
         if cache_blocks or _is_pipe_producer:
             return {'blocks': list(block_2_infos.keys())}
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1927,7 +1927,7 @@ def stock_stat(_ctx: click.Context,
         gs -m 50 | ss -d 2026-07-01 -top 10            # 全A股7月1日买入，前10名
         ss -s 603358.SH -d 2026-06-01 -v               # 逐 K 线明细
     """
-    CONSOLE = _ctx.obj['console']  # type: Console
+    _CSL = _ctx.obj['console']  # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # 确定日期范围
@@ -1949,11 +1949,11 @@ def stock_stat(_ctx: click.Context,
     try:
         stocks_list = list(stocks)
         if not stocks_list:
-            CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
+            _CSL.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
             return
 
         mode_label = "逐日持仓" if daily else "持仓盈亏"
-        CONSOLE.print(f"\n[bold]📈 {mode_label}统计[/bold] — "
+        _CSL.print(f"\n[bold]📈 {mode_label}统计[/bold] — "
                       f"买入: [yellow]{entry_date_str}[/yellow]，"
                       f"截止: [yellow]{end_date_str}[/yellow]，"
                       f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
@@ -1982,7 +1982,7 @@ def stock_stat(_ctx: click.Context,
         trading_days = [d for d in trading_days if d >= entry_ts]
 
         if not trading_days:
-            CONSOLE.print("[yellow]买入日后无交易数据[/yellow]")
+            _CSL.print("[yellow]买入日后无交易数据[/yellow]")
             return
 
         # ── Step 2: 预计算每只股票的买入成本和逐日累计盈亏 ──
@@ -2029,7 +2029,7 @@ def stock_stat(_ctx: click.Context,
             all_passed.add(full_code)
 
         if not stock_pnl:
-            CONSOLE.print("[yellow]无有效数据[/yellow]")
+            _CSL.print("[yellow]无有效数据[/yellow]")
             return
 
         # ── Step 3a: 逐日输出模式 ──
@@ -2071,7 +2071,7 @@ def stock_stat(_ctx: click.Context,
                 print_dataframe(df_day,
                                 title=f"📅 {day_str} 持仓盈亏（{len(df_day)} 只，显示前 {min(max_to_show, len(df_day))} 条）",
                                 avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
-                                show_footer=True, printer=CONSOLE.print)
+                                show_footer=True, printer=_CSL.print)
         else:
             # ── Step 3b: 最终汇总模式 ──
             stock_results = []
@@ -2101,7 +2101,7 @@ def stock_stat(_ctx: click.Context,
                 })
 
             if not stock_results:
-                CONSOLE.print("[yellow]无有效数据[/yellow]")
+                _CSL.print("[yellow]无有效数据[/yellow]")
                 return
 
             df_summary = pd.DataFrame(stock_results).sort_values('收盘盈亏%', ascending=False).reset_index(drop=True)
@@ -2112,13 +2112,13 @@ def stock_stat(_ctx: click.Context,
             else:
                 df_show = df_summary.head(max_to_show)
 
-            CONSOLE.print(f"\n统计完成: [green]{len(stock_results)}[/green] / {len(stocks_list)} 只")
+            _CSL.print(f"\n统计完成: [green]{len(stock_results)}[/green] / {len(stocks_list)} 只")
             print_dataframe(df_show,
                             title=f"持仓盈亏（买入日 {entry_date_str}，截止 {end_date_str}，"
                                   f"共 {len(df_summary)} 只，显示前 {min(max_to_show, len(df_show))} 条）",
                             sum_cols=['持有天数'],
                             avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
-                            show_footer=True, printer=CONSOLE.print)
+                            show_footer=True, printer=_CSL.print)
 
         # ── verbose: 逐 K 线明细 ──
         if is_verbose:
@@ -2132,14 +2132,14 @@ def stock_stat(_ctx: click.Context,
                 daily_cols = ['close', '收盘盈利%', '最高盈利%', '最低盈利%']
                 print_dataframe(df_detail[daily_cols].head(max_to_show),
                                 title=f"{sc.short_code} {get_stock_name(full_code, '')} 逐日明细（前 {min(max_to_show, len(pnl_list))} 天）",
-                                show_footer=True, printer=CONSOLE.print)
+                                show_footer=True, printer=_CSL.print)
 
         # ── 管道返回 ──
         if cache_stocks or _is_pipe_producer:
             return {'stocks': all_passed}
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2189,8 +2189,8 @@ def filter_capital_flow(_ctx: click.Context,
         fcf -zmin 500 -hmin 1000 -zmax 5000                 # 双条件范围筛选
         gs -m 50 | fcf -zmin 1000 -v                        # 管道：全A股 → 资金流筛选
     """
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # 确定交易日期 & 判断数据来源
@@ -2209,10 +2209,10 @@ def filter_capital_flow(_ctx: click.Context,
     try:
         stocks_list = list(stocks)
         if not stocks_list:
-            CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
+            _CSL.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
             return
 
-        CONSOLE.print(f"\n[bold]💰 主力资金流筛选[/bold] — 日期: [yellow]{trading_date_str}[/yellow]"
+        _CSL.print(f"\n[bold]💰 主力资金流筛选[/bold] — 日期: [yellow]{trading_date_str}[/yellow]"
                       f"{' (实时)' if is_realtime else ' (历史 DB)'}，"
                       f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
 
@@ -2248,7 +2248,7 @@ def filter_capital_flow(_ctx: click.Context,
         else:
             # ── 历史路径：stock_metrics DB ──
             progress_print(f"[bold]历史查询[/bold] {len(stocks_list)} 只个股在 {trading_date_str} 的 L2_DATA...")
-            db_url = _assemble_db_url(DB_TYPE, CFG)
+            db_url = _assemble_db_url(DB_TYPE, _CFG)
             StockMetrics.init_db(db_url)
 
             for _, stock_code in enumerate_with_progress(stocks_list, task_name="查询 L2_DATA"):
@@ -2285,30 +2285,30 @@ def filter_capital_flow(_ctx: click.Context,
                     })
 
         # ── 输出结果 ──
-        CONSOLE.print(f"\n筛选结果: [green]{len(passed_stocks)}[/green] / {len(stocks_list)} 只符合条件")
+        _CSL.print(f"\n筛选结果: [green]{len(passed_stocks)}[/green] / {len(stocks_list)} 只符合条件")
 
         if is_verbose:
             df_detail = pd.DataFrame(stock_details)
             df_sorted = df_detail.sort_values('主买净额(万)', ascending=False)
             print_dataframe(df_sorted.head(max_to_show),
                             title=f"个股资金流详情（前 {min(max_to_show, len(df_sorted))} 条）",
-                            show_footer=True, printer=CONSOLE.print)
+                            show_footer=True, printer=_CSL.print)
 
         # 打印通过筛选的股票列表
         if passed_stocks:
-            CONSOLE.print(f"符合条件个股: ", end='')
+            _CSL.print(f"符合条件个股: ", end='')
             if is_with_name:
                 stocks_to_show = [f"{sc}|{get_stock_name(sc)}" for sc in list(passed_stocks)[:max_to_show]]
             else:
                 stocks_to_show = list(passed_stocks)[:max_to_show]
-            CONSOLE.print(Pretty(stocks_to_show, max_length=max_to_show))
+            _CSL.print(Pretty(stocks_to_show, max_length=max_to_show))
 
         # ── 管道返回 ──
         if cache_stocks or _is_pipe_producer:
             return {'stocks': passed_stocks}
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2347,7 +2347,7 @@ def filter_limit(_ctx: click.Context,
         fl --no-filter-dt                           # 仅过滤涨停
         gs -m 50 | fl -v                            # 全A股过滤涨跌停
     """
-    CONSOLE = _ctx.obj['console']  # type: Console
+    _CSL = _ctx.obj['console']  # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     if date is None:
@@ -2363,10 +2363,10 @@ def filter_limit(_ctx: click.Context,
     try:
         stocks_list = list(stocks)
         if not stocks_list:
-            CONSOLE.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
+            _CSL.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
             return
 
-        CONSOLE.print(f"\n[bold]🚫 涨跌停过滤[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
+        _CSL.print(f"\n[bold]🚫 涨跌停过滤[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
                       f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
 
         # 取近2日 Close 计算涨跌停价
@@ -2405,20 +2405,20 @@ def filter_limit(_ctx: click.Context,
                 continue
             kept.add(full_code)
 
-        CONSOLE.print(f"涨停剔除: [red]{len(zt_stocks)}[/red] 只，"
+        _CSL.print(f"涨停剔除: [red]{len(zt_stocks)}[/red] 只，"
                       f"跌停剔除: [green]{len(dt_stocks)}[/green] 只，"
                       f"保留: [yellow]{len(kept)}[/yellow] 只")
 
         if is_verbose and zt_stocks:
-            CONSOLE.print(f"涨停股: {list(zt_stocks)[:20]}")
+            _CSL.print(f"涨停股: {list(zt_stocks)[:20]}")
         if is_verbose and dt_stocks:
-            CONSOLE.print(f"跌停股: {list(dt_stocks)[:20]}")
+            _CSL.print(f"跌停股: {list(dt_stocks)[:20]}")
 
         if cache_stocks or _is_pipe_producer:
             return {'stocks': kept}
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 def _safe_float(val) -> float:
@@ -2468,16 +2468,16 @@ def order_stock(_ctx: click.Context,
     """下单接口【暂无实际功能】"""
     code = SecurityCode(stock)
     full_code = code.full_code
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         res = tq.order_stock(account=account, stock_code=full_code,
             order_type=order_type, order_volume=order_volume,
             price_type=price_type, price=price,
             strategy_name=strategy_name, order_remark=order_remark)
 
-        CONSOLE.print(f"下单 {full_code} 结果: {res}")
+        _CSL.print(f"下单 {full_code} 结果: {res}")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 # ---------------------------------------------------------------------------------------------
 # 自选股/自定义板块
@@ -2501,7 +2501,7 @@ def get_user_sector(
     管道返回 {'stocks': set[str], 'user_blocks': list[{'Code': ..., 'Name': ...}]}
     user_blocks 与标准 blocks (88XXXX.SH) 不同，是用户自定义板块的 Code/Name 对。
     """
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     try:
@@ -2518,12 +2518,12 @@ def get_user_sector(
                             break
 
                 if sectors_filtered:
-                    CONSOLE.print(f"自定义板块（过滤含有 {contains} ）共 {len(sectors_filtered)} / {len(sectors)} 个。" )
+                    _CSL.print(f"自定义板块（过滤含有 {contains} ）共 {len(sectors_filtered)} / {len(sectors)} 个。" )
                 else:
-                    CONSOLE.print(f"未发现包含 {contains} 的自定义板块。")
+                    _CSL.print(f"未发现包含 {contains} 的自定义板块。")
                     return
             else:
-                CONSOLE.print(f"自定义板块，共 {len(sectors)} 个。")
+                _CSL.print(f"自定义板块，共 {len(sectors)} 个。")
 
             # 管道收集：板块 {Code, Name} + 板块内的个股
             user_blocks = []
@@ -2553,16 +2553,16 @@ def get_user_sector(
             D("[test]", df=df)
             df_sorted = df.sort_values(by='stock.num', ascending=False)
             print_dataframe(df_sorted, f'自定义板块概要{f"（过滤含有 {contains} 的板块）" if sectors_filtered else ""}',
-                            printer=CONSOLE.print)
+                            printer=_CSL.print)
 
             # ── 管道返回 ──
             if cache_stocks or _is_pipe_producer:
                 return {'stocks': all_stocks_in_sectors,
                         'user_blocks': user_blocks}
         else:
-            CONSOLE.print(f"未发现自定义板块")
+            _CSL.print(f"未发现自定义板块")
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 
@@ -2598,7 +2598,7 @@ def user_sector(
     stock_group_index: int,
 ):
     """获取自定义板块中的股票列表（需要先使用 get_user_sector 获取板块列表）"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     action = action.lower()
@@ -2622,28 +2622,28 @@ def user_sector(
             filtered_sectors = []
             if abbrev:
                 filtered_sectors.extend([{'Code': c, 'Name': n} for c, n in sectors_code2name.items() if abbrev in c])
-                CONSOLE.print(f"匹配到的板块（包含 {abbrev} 的板块名称）：{filtered_sectors}")
+                _CSL.print(f"匹配到的板块（包含 {abbrev} 的板块名称）：{filtered_sectors}")
             if name:
                 filtered_sectors.extend([{'Code': c, 'Name': n} for c, n in sectors_code2name.items() if name in n])
-                CONSOLE.print(f"匹配到的板块（包含 {name} 的板块名称）：{filtered_sectors}")
+                _CSL.print(f"匹配到的板块（包含 {name} 的板块名称）：{filtered_sectors}")
 
             if abbrev or name:
 
                 stocks_in_filtered_sectors = set()
 
-                CONSOLE.print(f"已匹配到的板块列表 {len(filtered_sectors)} / {len(sectors)}: {filtered_sectors}")
+                _CSL.print(f"已匹配到的板块列表 {len(filtered_sectors)} / {len(sectors)}: {filtered_sectors}")
 
                 for f_sector in filtered_sectors:
                     _code = f_sector['Code']
 
                     _stocks = tq.get_stock_list_in_sector(block_code=_code, block_type=1, list_type=0)
 
-                    CONSOLE.print(f"板块代码 {_code} 内有 {len(_stocks)} 只个股:", end='')
+                    _CSL.print(f"板块代码 {_code} 内有 {len(_stocks)} 只个股:", end='')
                     if is_with_name:
                         stocks_with_name = [f"{code}|{get_stock_name(code)}" for code in _stocks]
-                        CONSOLE.print(Pretty(stocks_with_name, max_length=max_to_show) if max_to_show > 0 else stocks_with_name)
+                        _CSL.print(Pretty(stocks_with_name, max_length=max_to_show) if max_to_show > 0 else stocks_with_name)
                     else:
-                        CONSOLE.print(Pretty(_stocks, max_length=max_to_show) if max_to_show > 0 else _stocks)
+                        _CSL.print(Pretty(_stocks, max_length=max_to_show) if max_to_show > 0 else _stocks)
 
                     if show_on_tdx:
                         tq.send_user_block(block_code=_code, stock_list=_stocks, show=True) # 把最后一个显示在客户端
@@ -2654,8 +2654,8 @@ def user_sector(
                 if cache_stocks or _is_pipe_producer:
                         return {'stocks': stocks_in_filtered_sectors}
             else:
-                CONSOLE.print(f"自定义板块列表（共 {len(sectors)} 个）: ", end='')
-                CONSOLE.print(Pretty(sectors))
+                _CSL.print(f"自定义板块列表（共 {len(sectors)} 个）: ", end='')
+                _CSL.print(Pretty(sectors))
 
             # 当 action == get 时，-cs 参数可存储板块中的个股到 cache_cmd.STOCKS 中，供后续命令使用
             if cache_stocks or _is_pipe_producer:
@@ -2681,7 +2681,7 @@ def user_sector(
 
             tq.send_user_block(block_code=code, stock_list=stocks, show=show_on_tdx)
 
-            CONSOLE.print(f"已将 {len(stocks)} 只个股添加到自定义板块【代码：{code} 名称：{name}】中")
+            _CSL.print(f"已将 {len(stocks)} 只个股添加到自定义板块【代码：{code} 名称：{name}】中")
 
         elif action == 'create':
             if not name:
@@ -2702,19 +2702,19 @@ def user_sector(
             else:
                 create_res = tq.create_sector(block_code=abbrev, block_name=name)
                 I(create_res=create_res)
-                CONSOLE.print(f"✅ 已创建自定义板块【简称：{abbrev} 名称：{name}】")
+                _CSL.print(f"✅ 已创建自定义板块【简称：{abbrev} 名称：{name}】")
                 is_new = True
                 existing_code = abbrev
 
             if stocks and existing_code:
                 if is_new:
                     tq.send_user_block(block_code=existing_code, stock_list=stocks, show=show_on_tdx)
-                    CONSOLE.print(f"   已添加 {len(stocks)} 只个股到新板块")
+                    _CSL.print(f"   已添加 {len(stocks)} 只个股到新板块")
                 else:
                     label = sectors_code2name.get(existing_code, existing_code)
                     if click.confirm(f"是否将 {len(stocks)} 只个股追加到已有板块【{label}】？", default=True):
                         tq.send_user_block(block_code=existing_code, stock_list=stocks, show=show_on_tdx)
-                        CONSOLE.print(f"   已添加 {len(stocks)} 只个股到该板块")
+                        _CSL.print(f"   已添加 {len(stocks)} 只个股到该板块")
 
         elif action == 'remove' or action == 'remove-st':
             if abbrev:
@@ -2732,12 +2732,12 @@ def user_sector(
                 if stocks:
                     remained_stocks = set(_stocks) - set(stocks)
                     tq.send_user_block(block_code=code, stocks=list(remained_stocks), show=show_on_tdx)
-                    CONSOLE.print(f"已从自定义板块【代码：{code} 名称：{name}】中删除 {len(stocks)} 只个股，剩余 {len(remained_stocks)} 只个股: ", end='')
-                    CONSOLE.print(Pretty(list(remained_stocks), max_length=max_to_show) if max_to_show > 0 else list(remained_stocks))
+                    _CSL.print(f"已从自定义板块【代码：{code} 名称：{name}】中删除 {len(stocks)} 只个股，剩余 {len(remained_stocks)} 只个股: ", end='')
+                    _CSL.print(Pretty(list(remained_stocks), max_length=max_to_show) if max_to_show > 0 else list(remained_stocks))
                 else:
-                    CONSOLE.print(f"[pink] 未指定需要从板块中删除的个股，请带上 -s 参数指定要删除的个股 [/pink]")
-                    CONSOLE.print(f"自定义板块【代码：{code} 名称：{name}】中共有 {len(_stocks)} 只个股: ", end='')
-                    CONSOLE.print(Pretty(_stocks, max_length=max_to_show) if max_to_show > 0 else _stocks)
+                    _CSL.print(f"[pink] 未指定需要从板块中删除的个股，请带上 -s 参数指定要删除的个股 [/pink]")
+                    _CSL.print(f"自定义板块【代码：{code} 名称：{name}】中共有 {len(_stocks)} 只个股: ", end='')
+                    _CSL.print(Pretty(_stocks, max_length=max_to_show) if max_to_show > 0 else _stocks)
             elif action == 'remove-st':
                 # 获取板块中的个股列表，过滤掉名称中包含 ST 的个股后再发送到客户端
                 st_stocks = []
@@ -2751,18 +2751,18 @@ def user_sector(
                 tq.clear_sector(block_code=code)  # 先清空原有板块中的个股
                 tq.send_user_block(block_code=code, stock_list=keep_stocks, show=show_on_tdx)  # 再把过滤掉 ST 后的个股发送到客户端
 
-                CONSOLE.print(f"已从自定义板块【代码：{code} 名称：{name}】中删除 ST 的个股共 {len(_stocks) - len(keep_stocks)} 只: ", end='')
-                CONSOLE.print(Pretty(st_stocks, max_length=max_to_show) if max_to_show > 0 else st_stocks)
+                _CSL.print(f"已从自定义板块【代码：{code} 名称：{name}】中删除 ST 的个股共 {len(_stocks) - len(keep_stocks)} 只: ", end='')
+                _CSL.print(Pretty(st_stocks, max_length=max_to_show) if max_to_show > 0 else st_stocks)
 
 
         elif action == 'clear':
             filtered_sectors = []
             if abbrev:
                 filtered_sectors.extend([{'Code': c, 'Name': n} for c, n in sectors_code2name.items() if abbrev in c])
-                CONSOLE.print(f"匹配到的板块（包含 {abbrev} 的板块名称）：{filtered_sectors}")
+                _CSL.print(f"匹配到的板块（包含 {abbrev} 的板块名称）：{filtered_sectors}")
             if name:
                 filtered_sectors.extend([{'Code': c, 'Name': n} for c, n in sectors_code2name.items() if name in n])
-                CONSOLE.print(f"匹配到的板块（包含 {name} 的板块名称）：{filtered_sectors}")
+                _CSL.print(f"匹配到的板块（包含 {name} 的板块名称）：{filtered_sectors}")
 
             clear_all = False
             for sector_info in filtered_sectors:
@@ -2787,12 +2787,12 @@ def user_sector(
                     click.secho("❌ 成功删除自定义板块", style=Style(color="green"))
                     # 这里执行单个任务的逻辑
                 elif answer == "a":
-                    CONSOLE.print("⚠️ 接下来删除余下的自定义板块", style=Style(color="yellow", bold=True))
+                    _CSL.print("⚠️ 接下来删除余下的自定义板块", style=Style(color="yellow", bold=True))
                     clear_all = True
 
                 click.confirm(f"确定要清空自定义板块【代码：{code} 名称：{name}】中的个股吗？", abort=True)
 
-                CONSOLE.print(f"已清空自定义板块【代码：{code} 名称：{name}】中的个股")
+                _CSL.print(f"已清空自定义板块【代码：{code} 名称：{name}】中的个股")
 
         elif action == 'diff':
             if abbrev1:
@@ -2817,18 +2817,18 @@ def user_sector(
             only_in_2 = stocks2 - stocks1
             in_both = stocks1 & stocks2
 
-            CONSOLE.print(f"仅在 {abbrev1} 中的个股（共 {len(only_in_1)} 只）: ", end='')
-            CONSOLE.print(Pretty(list(only_in_1), max_length=max_to_show) if max_to_show > 0 else list(only_in_1))
+            _CSL.print(f"仅在 {abbrev1} 中的个股（共 {len(only_in_1)} 只）: ", end='')
+            _CSL.print(Pretty(list(only_in_1), max_length=max_to_show) if max_to_show > 0 else list(only_in_1))
 
-            CONSOLE.print(f"仅在 {abbrev2} 中的个股（共 {len(only_in_2)} 只）: ", end='')
-            CONSOLE.print(Pretty(list(only_in_2), max_length=max_to_show) if max_to_show > 0 else list(only_in_2))
+            _CSL.print(f"仅在 {abbrev2} 中的个股（共 {len(only_in_2)} 只）: ", end='')
+            _CSL.print(Pretty(list(only_in_2), max_length=max_to_show) if max_to_show > 0 else list(only_in_2))
 
-            CONSOLE.print(f"同时在 {abbrev1} 和 {abbrev2} 中的个股（共 {len(in_both)} 只）: ", end='')
-            CONSOLE.print(Pretty(list(in_both), max_length=max_to_show) if max_to_show > 0 else list(in_both))
+            _CSL.print(f"同时在 {abbrev1} 和 {abbrev2} 中的个股（共 {len(in_both)} 只）: ", end='')
+            _CSL.print(Pretty(list(in_both), max_length=max_to_show) if max_to_show > 0 else list(in_both))
 
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2851,15 +2851,15 @@ def get_trading_dates(
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console']  # type: Console
+    _CSL = _ctx.obj['console']  # type: Console
 
     try:
         res = tq.get_trading_dates(market='SH', start_time=start_time, end_time=end_time, count=count)
-        CONSOLE.print(f"{res}")
+        _CSL.print(f"{res}")
         return res
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 # ---------------------------------------------------------------------------------------------
 # 调用通达信公式
@@ -2933,12 +2933,12 @@ def formula(
     """
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console'] # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     if not stocks:
-        CONSOLE.print("⚠️ 股票列表为空，请使用 -s/--stock （或在 memory-cache 命令中缓存）指定。")
+        _CSL.print("⚠️ 股票列表为空，请使用 -s/--stock （或在 memory-cache 命令中缓存）指定。")
         return
 
     _ft_name = {
@@ -2972,26 +2972,26 @@ def formula(
                 title += f"（共 {len(res)} / {total_formula_num} 个）"
 
             if res:
-                print_dataframe(_all_formula_df, title=title, table_max_rows=max_to_show, printer=CONSOLE.print)
+                print_dataframe(_all_formula_df, title=title, table_max_rows=max_to_show, printer=_CSL.print)
             else:
-                CONSOLE.print(f"未找到合符条件的 {_ft_name} 公式。")
+                _CSL.print(f"未找到合符条件的 {_ft_name} 公式。")
 
             if verbose:
                 for formula_info in res:
                     _f_name = formula_info.get('acName', '')
                     _f_code = formula_info.get('acCode', '')
                     formula_detail_info = tq.formula_get_info(formula_type=_ft_int, formula_code=_f_code)
-                    CONSOLE.print(f"{_ft_name} 公式 {_f_name}（{_f_code}）的详细信息:")
-                    CONSOLE.print(Pretty(formula_detail_info))
+                    _CSL.print(f"{_ft_name} 公式 {_f_name}（{_f_code}）的详细信息:")
+                    _CSL.print(Pretty(formula_detail_info))
 
             return
 
         # ── 阶段2: 请求参数准备 ──
         trading_dates = tq.get_trading_dates(market='SH', start_time='', end_time='', count=count)
-        CONSOLE.print(f"len(trading_dates) = {len(trading_dates)}")
+        _CSL.print(f"len(trading_dates) = {len(trading_dates)}")
         if verbose:
-            CONSOLE.print(f"trading_dates = ", end='')
-            CONSOLE.print(Pretty(trading_dates, max_length=max_to_show))
+            _CSL.print(f"trading_dates = ", end='')
+            _CSL.print(Pretty(trading_dates, max_length=max_to_show))
 
         # --save-db 且非管道/非 verbose 时不累加全量内存（边跑边存已落盘每只个股）
         _should_accumulate = not (is_save_db and _is_zb and not verbose and not _is_pipe_producer)
@@ -3003,11 +3003,11 @@ def formula(
         formula_key = f"{name}|{','.join(args)}" if args else name
 
         # 准备工作：预先计算 DB URL（供 -sdb 边跑边存用）
-        _db_url = _assemble_db_url(DB_TYPE, CFG) if is_save_db else None
+        _db_url = _assemble_db_url(DB_TYPE, _CFG) if is_save_db else None
         if _db_url:
             StockMetrics.init_db(_db_url)
 
-        for stock_idx, full_code in enumerate_with_progress(stocks, task_name="逐个股票调用公式", console=CONSOLE):
+        for stock_idx, full_code in enumerate_with_progress(stocks, task_name="逐个股票调用公式", console=_CSL):
             # NOTICE: 通达信缺陷：L2 数据需要软件先跳转（触发界面拉取后）才能获取，不然全是 0 值
             # 跳转逻辑：首只在循环内跳转，后续在上一轮末尾已提前跳转
             if jump_tdx is not None and stock_idx == 0:
@@ -3018,7 +3018,7 @@ def formula(
                                                        count=count, dividend_type=dividend_type)
             if isinstance(formula_set_res, dict):
                 if int(formula_set_res.get('ErrorId', '-1')) != 0:
-                    CONSOLE.print(f"[ERROR] formula_set_res(): {formula_set_res}")
+                    _CSL.print(f"[ERROR] formula_set_res(): {formula_set_res}")
                     break
 
             # 调用公式 API（类型分发）
@@ -3030,7 +3030,7 @@ def formula(
                 formula_res = tq.formula_exp(formula_name=name, formula_arg=formula_arg)
 
             if verbose:
-                CONSOLE.print(f"{full_code} {get_stock_name(full_code)} "
+                _CSL.print(f"{full_code} {get_stock_name(full_code)} "
                               f"在{_ft_name} {name} 值: {json.dumps(formula_res, indent=2, ensure_ascii=False)}")
 
             # 提取 value_of_res（所有类型共用）
@@ -3075,10 +3075,10 @@ def formula(
                 cnt_of_res = len(value_of_res_VALUES_LIST[0])
 
                 if verbose:
-                    CONSOLE.print(f"指标有{len(value_of_res)}个数：{value_of_res.keys()}，涵盖 {cnt_of_res} 天")
+                    _CSL.print(f"指标有{len(value_of_res)}个数：{value_of_res.keys()}，涵盖 {cnt_of_res} 天")
 
                 if cnt_of_res < count:
-                    CONSOLE.print(f"⚠️ 返回指标天数 < 请求的数量({count})")
+                    _CSL.print(f"⚠️ 返回指标天数 < 请求的数量({count})")
 
                 valid_cnt = min(cnt_of_res, len(trading_dates))
                 df = pd.DataFrame(value_of_res, index=pd.to_datetime(trading_dates[-cnt_of_res:]))
@@ -3092,14 +3092,14 @@ def formula(
                     if not df.empty:
                         print_dataframe(df,
                                         title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（未过滤空值）",
-                                        table_max_rows=max_to_show, printer=CONSOLE.print)
+                                        table_max_rows=max_to_show, printer=_CSL.print)
 
                 # zb 始终打印每股票详情；xg 仅在 verbose 时打印
                 if _is_zb or verbose:
                     if not df_cleaned.empty:
                         print_dataframe(df_cleaned,
                                         title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（已过滤空值）",
-                                        table_max_rows=max_to_show, printer=CONSOLE.print)
+                                        table_max_rows=max_to_show, printer=_CSL.print)
 
                 if code_2_df is not None:
                     code_2_df[full_code] = df_cleaned if not df_cleaned.empty else df
@@ -3115,7 +3115,7 @@ def formula(
                     if is_save_db and _is_zb and not df_cleaned.empty:
                         StockMetrics.bulk_upsert_from_dfs(
                             {full_code: df_cleaned}, formula_key, period,
-                            dividend_type, _db_url, replace=is_replace, console=CONSOLE)
+                            dividend_type, _db_url, replace=is_replace, console=_CSL)
 
                     # 若落盘耗时 < jump_tdx，补足剩余等待时间
                     if _t0 is not None:
@@ -3127,11 +3127,11 @@ def formula(
                     if is_save_db and _is_zb and not df_cleaned.empty:
                         StockMetrics.bulk_upsert_from_dfs(
                             {full_code: df_cleaned}, formula_key, period,
-                            dividend_type, _db_url, replace=is_replace, console=CONSOLE)
+                            dividend_type, _db_url, replace=is_replace, console=_CSL)
 
         # ── 阶段4: 结果输出（类型分发） ──
         if verbose and code_2_value is not None:
-            CONSOLE.print(f"code_2_value = {code_2_value}")
+            _CSL.print(f"code_2_value = {code_2_value}")
 
         if _is_zb:
             if code_2_df is not None:
@@ -3149,25 +3149,25 @@ def formula(
                                                     is_with_name=is_with_name)
             print_dataframe(res_df, title='选股结果', flatten_list=True,
                             exclude_cols=['stocks'] if is_with_name else [],
-                            printer=CONSOLE.print)
+                            printer=_CSL.print)
         elif _is_exp:
             res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates,
                                                     field_be_counted='ENTERLONG',
                                                     is_with_name=is_with_name)
             print_dataframe(res_df, title='专家系统 买入信号（ENTERLONG）统计结果',
                             exclude_cols=['stocks'] if is_with_name else [],
-                            printer=CONSOLE.print)
+                            printer=_CSL.print)
 
             res_df = _trans_xg_data_to_date2stocks(code_2_value, trading_dates,
                                                     field_be_counted='EXITLONG',
                                                     is_with_name=is_with_name)
             print_dataframe(res_df, title='专家系统 卖出信号（EXITLONG）统计结果',
                             exclude_cols=['stocks'] if is_with_name else [],
-                            printer=CONSOLE.print)
+                            printer=_CSL.print)
 
         if verbose:
-            CONSOLE.print(f"res_df = ", end='')
-            CONSOLE.print(Pretty(res_df))
+            _CSL.print(f"res_df = ", end='')
+            _CSL.print(Pretty(res_df))
 
         # stocks_on_date = _trans_xg_data_to_date2stocks(df)
         # for date, stocks in stocks_on_date.items():
@@ -3177,7 +3177,7 @@ def formula(
         #         print(f"{date}: []")
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 
@@ -3275,8 +3275,8 @@ def formula_multi(
 
     print_locals()
 
-    CONSOLE = _ctx.obj['console'] # type: Console
-    CFG = _ctx.obj['cfg'] # type: dict
+    _CSL = _ctx.obj['console'] # type: Console
+    _CFG = _ctx.obj['cfg'] # type: dict
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     try:
@@ -3305,7 +3305,7 @@ def formula_multi(
             if return_start_time or return_end_time:
                 mul_res_df = mul_res_df[(mul_res_df['Date'] >= return_start_time.strftime('%Y-%m-%d')) & (mul_res_df['Date'] <= return_end_time.strftime('%Y-%m-%d'))]
 
-            print_dataframe(mul_res_df, title=f"批量调用选股公式结果", printer=CONSOLE.print)
+            print_dataframe(mul_res_df, title=f"批量调用选股公式结果", printer=_CSL.print)
 
             stocks_on_date = set()
             if is_save_user_sector or cache_stocks:
@@ -3328,7 +3328,7 @@ def formula_multi(
                             I(create_res=create_res)
                             tq.send_user_block(block_code=block_code, stock_list=stocks, show=True)
 
-                            CONSOLE.print(f"{date} 选出 {len(stocks)} 只股票，存于自定义板块 [yellow]{usr_block_name}[/yellow] 内。")
+                            _CSL.print(f"{date} 选出 {len(stocks)} 只股票，存于自定义板块 [yellow]{usr_block_name}[/yellow] 内。")
 
                     if cache_stocks or _is_pipe_producer:
                         stocks_on_date.update(stocks)
@@ -3354,8 +3354,8 @@ def formula_multi(
                 count=count,
             )
             if verbose:
-                CONSOLE.print(f"批量调用指标公式结果: ", end='')
-                CONSOLE.print(Pretty(mul_res, max_length=200))
+                _CSL.print(f"批量调用指标公式结果: ", end='')
+                _CSL.print(Pretty(mul_res, max_length=200))
 
                 # 把完整的结果保存到文件中
                 with open(f"output/RESULT-{'.'.join(stocks)}-zb_{name}({formula_arg}).json", 'w+', encoding='utf-8') as F:
@@ -3367,7 +3367,7 @@ def formula_multi(
 
             # 检查转换后的DataFrame是否为空
             if df_long.empty:
-                CONSOLE.print(f"[yellow]公式 {name} 返回的数据为空[/yellow]")
+                _CSL.print(f"[yellow]公式 {name} 返回的数据为空[/yellow]")
                 return
 
             # 处理 exclude/include fields
@@ -3417,28 +3417,28 @@ def formula_multi(
                 df_long = df_long[cols_to_keep]
 
             if output_style == 'long':
-                print_dataframe(df_long, title="方法1：长格式DataFrame", sum_cols=sum_columns, printer=CONSOLE.print)
+                print_dataframe(df_long, title="方法1：长格式DataFrame", sum_cols=sum_columns, printer=_CSL.print)
             elif output_style == 'field':
                 # 方法2：转换为透视表（每个指标一个表）
-                CONSOLE.print("透视表格式（每个指标一个表）")
+                _CSL.print("透视表格式（每个指标一个表）")
                 pivot_dfs = _zb_multi_result_to_pivot(df_long)
                 for indicator, pivot_df in pivot_dfs.items():
-                    print_dataframe(pivot_df, title=f"指标: {indicator}", sum_cols=sum_columns, printer=CONSOLE.print)
+                    print_dataframe(pivot_df, title=f"指标: {indicator}", sum_cols=sum_columns, printer=_CSL.print)
             elif output_style == 'stock':
                 # 方法3：转换为以股票为第一层的DataFrame
-                CONSOLE.print("以股票为第一层的DataFrame")
+                _CSL.print("以股票为第一层的DataFrame")
                 stock_dfs = _zb_multi_result_dataframe_stock_first(df_long)
                 for stock_code, stock_df in stock_dfs.items():
-                    print_dataframe(stock_df, title=f"{stock_code}|{get_stock_name(stock_code,'')} 在 [yellow]{name}[/yellow] 指标的值", sum_cols=sum_columns, printer=CONSOLE.print)
+                    print_dataframe(stock_df, title=f"{stock_code}|{get_stock_name(stock_code,'')} 在 [yellow]{name}[/yellow] 指标的值", sum_cols=sum_columns, printer=_CSL.print)
 
                     # 边跑边存：每只股票立即入库
                     if is_save_db and formula_type == 'zb' and not stock_df.empty:
                         formula_key = f"{name}|{','.join(args)}" if args else name
-                        db_url = _assemble_db_url(DB_TYPE, CFG)
+                        db_url = _assemble_db_url(DB_TYPE, _CFG)
                         StockMetrics.init_db(db_url)
                         StockMetrics.bulk_upsert_from_dfs(
                             {stock_code: stock_df}, formula_key, period,
-                            dividend_type, db_url, console=CONSOLE)
+                            dividend_type, db_url, console=_CSL)
 
                 if cache_df:
                     formula_key = f"{name}|{','.join(args)}" if args else name
@@ -3446,7 +3446,7 @@ def formula_multi(
                             'formula_key': formula_key, 'dividend_type': dividend_type,
                             '_source': 'stock_metrics'}
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -3488,8 +3488,8 @@ def get_stock_metrics(_ctx: click.Context,
         gsm -s 603337.SH -fk L2_DATA -ik DDX -c 5             # 查最近5天 DDX 值
         gsm -s 603337.SH,600000.SH -fk MY_MR_ZJLX|1 -c 10     # 多只股票
     """
-    CONSOLE = _ctx.obj['console']  # type: Console
-    CFG = _ctx.obj['cfg']  # type: dict
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
 
     if db_type is None:
         db_type = DB_TYPE
@@ -3509,7 +3509,7 @@ def get_stock_metrics(_ctx: click.Context,
     print_locals()
 
     try:
-        db_url = _assemble_db_url(db_type, CFG)
+        db_url = _assemble_db_url(db_type, _CFG)
 
         for full_code in stocks:
             rows = StockMetrics.query(
@@ -3525,7 +3525,7 @@ def get_stock_metrics(_ctx: click.Context,
                 rows = rows[:count]
 
             if not rows:
-                CONSOLE.print(f"[dim]{full_code} {get_stock_name(full_code)} — 无数据[/dim]")
+                _CSL.print(f"[dim]{full_code} {get_stock_name(full_code)} — 无数据[/dim]")
                 continue
 
             # 转为 DataFrame 展示
@@ -3536,10 +3536,10 @@ def get_stock_metrics(_ctx: click.Context,
                      f"指标: {formula_key or '全部'}"
                      f"{' → ' + indicator_key if indicator_key else ''}"
                      f" (period={period}, dividend_type={dividend_type})")
-            print_dataframe(df, title=title, show_footer=True, printer=CONSOLE.print)
+            print_dataframe(df, title=title, show_footer=True, printer=_CSL.print)
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -3556,9 +3556,9 @@ def subscribe_hq(_ctx: click.Context,
     is_unsubscribe: bool,
 ):
     """订阅行情"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     if not stocks:
-        CONSOLE.print("[yellow]请至少指定一只股票进行订阅/取消订阅[/yellow]")
+        _CSL.print("[yellow]请至少指定一只股票进行订阅/取消订阅[/yellow]")
         return
 
     global SUBSCRIBED_STOCKS
@@ -3567,13 +3567,13 @@ def subscribe_hq(_ctx: click.Context,
         if is_unsubscribe:
             tq.unsubscribe_hq(stock_list=stocks)
             SUBSCRIBED_STOCKS.difference_update(stocks)
-            CONSOLE.print(f"已取消订阅股票: {stocks}，当前订阅列表: {SUBSCRIBED_STOCKS}")
+            _CSL.print(f"已取消订阅股票: {stocks}，当前订阅列表: {SUBSCRIBED_STOCKS}")
             return
 
-        tq.subscribe_hq(stock_list=stocks, callback=lambda data: CONSOLE.print(f"行情更新: {data}"))
+        tq.subscribe_hq(stock_list=stocks, callback=lambda data: _CSL.print(f"行情更新: {data}"))
         SUBSCRIBED_STOCKS.update(stocks)
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 
@@ -3585,13 +3585,13 @@ def _example(_ctx: click.Context,
     stocks: list[str],
 ):
     """"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
     try:
         for full_code in stocks:
             # TODO:
-            CONSOLE.print(f"{full_code} :", )
+            _CSL.print(f"{full_code} :", )
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -3615,59 +3615,59 @@ def print_pipe(_ctx: click.Context,
     简单类型（stocks 等）由管道引擎自动注入 --stock 参数；
     复杂类型（df / dfs）通过 _pipe_data 传递，本命令从 ctx.obj 显式读取。
     """
-    CONSOLE = _ctx.obj['console']  # type: Console
+    _CSL = _ctx.obj['console']  # type: Console
     if verbose:
-        CONSOLE.print(f"ctx.obj = { {k: v for k, v in _ctx.obj.items() if k.startswith('_')} }")
+        _CSL.print(f"ctx.obj = { {k: v for k, v in _ctx.obj.items() if k.startswith('_')} }")
 
     # ── 1. 简单类型：由 click.option 接收（管道引擎自动注入） ──
     if stocks:
-        CONSOLE.print(f"\n[bold cyan]📦 stocks[/bold cyan] （[bold]{len(stocks)}[/bold] 只）:")
-        CONSOLE.print(Pretty(stocks, max_length=max_to_show) if len(stocks) > max_to_show else list(stocks))
+        _CSL.print(f"\n[bold cyan]📦 stocks[/bold cyan] （[bold]{len(stocks)}[/bold] 只）:")
+        _CSL.print(Pretty(stocks, max_length=max_to_show) if len(stocks) > max_to_show else list(stocks))
     else:
-        CONSOLE.print("[dim]📦 stocks: (空)[/dim]")
+        _CSL.print("[dim]📦 stocks: (空)[/dim]")
 
     # ── 2. 复杂类型：从 _pipe_data 显式读取 ──
     pipe_data = _ctx.obj.get('_pipe_data')
     if not pipe_data:
-        CONSOLE.print("\n[yellow]⚠️ 未收到 _pipe_data（可能不在管道中，或上游未返回数据）[/yellow]")
-        CONSOLE.print("[dim]提示: 管道中上游命令需返回 dict 类型（如 {'stocks': ..., 'df': ..., 'dfs': ...}）[/dim]")
+        _CSL.print("\n[yellow]⚠️ 未收到 _pipe_data（可能不在管道中，或上游未返回数据）[/yellow]")
+        _CSL.print("[dim]提示: 管道中上游命令需返回 dict 类型（如 {'stocks': ..., 'df': ..., 'dfs': ...}）[/dim]")
         return
 
-    CONSOLE.print(f"\n[bold]🔗 _pipe_data 包含的 key:[/bold] {list(pipe_data.keys())}")
+    _CSL.print(f"\n[bold]🔗 _pipe_data 包含的 key:[/bold] {list(pipe_data.keys())}")
 
     # ── 2a. df ──
     _df = pipe_data.get('df')
     if _df is not None:
         if isinstance(_df, pd.DataFrame):
-            CONSOLE.print(f"\n[bold cyan]📊 df[/bold cyan]  shape={_df.shape}, columns={list(_df.columns)}, "
+            _CSL.print(f"\n[bold cyan]📊 df[/bold cyan]  shape={_df.shape}, columns={list(_df.columns)}, "
                           f"index={_df.index.name or type(_df.index).__name__}")
             # 如果 df 较小则直接打印，否则仅打印 head
             if _df.shape[0] <= 20:
-                print_dataframe(_df, title='df 完整内容', printer=CONSOLE.print)
+                print_dataframe(_df, title='df 完整内容', printer=_CSL.print)
             else:
-                print_dataframe(_df.head(10), title='df 前 10 行', printer=CONSOLE.print)
-                CONSOLE.print(f"[dim]... 省略 {_df.shape[0] - 10} 行[/dim]")
+                print_dataframe(_df.head(10), title='df 前 10 行', printer=_CSL.print)
+                _CSL.print(f"[dim]... 省略 {_df.shape[0] - 10} 行[/dim]")
         else:
-            CONSOLE.print(f"[dim]📊 df: type={type(_df).__name__} (非 DataFrame，跳过)[/dim]")
+            _CSL.print(f"[dim]📊 df: type={type(_df).__name__} (非 DataFrame，跳过)[/dim]")
 
     # ── 2b. dfs ──
     _dfs = pipe_data.get('dfs')
     if _dfs is not None:
         if isinstance(_dfs, dict) and _dfs:
-            CONSOLE.print(f"\n[bold cyan]📚 dfs[/bold cyan] （[bold]{len(_dfs)}[/bold] 个股票）:")
+            _CSL.print(f"\n[bold cyan]📚 dfs[/bold cyan] （[bold]{len(_dfs)}[/bold] 个股票）:")
             for code, s_df in _dfs.items():
                 if isinstance(s_df, pd.DataFrame):
-                    CONSOLE.print(f"  [cyan]{code}[/cyan]  shape={s_df.shape}, columns={list(s_df.columns)}")
+                    _CSL.print(f"  [cyan]{code}[/cyan]  shape={s_df.shape}, columns={list(s_df.columns)}")
                 else:
-                    CONSOLE.print(f"  [cyan]{code}[/cyan]  type={type(s_df).__name__} (非 DataFrame)")
+                    _CSL.print(f"  [cyan]{code}[/cyan]  type={type(s_df).__name__} (非 DataFrame)")
         else:
-            CONSOLE.print("[dim]📚 dfs: (空)[/dim]")
+            _CSL.print("[dim]📚 dfs: (空)[/dim]")
 
     # —— 2c. blocks ——
     _blocks = pipe_data.get('blocks')
     if _blocks:
-        CONSOLE.print(f"\n[bold cyan]📦 blocks[/bold cyan] （[bold]{len(_blocks)}[/bold] 个板块）:")
-        CONSOLE.print(Pretty(_blocks, max_length=max_to_show) if len(_blocks) > max_to_show else list(_blocks))
+        _CSL.print(f"\n[bold cyan]📦 blocks[/bold cyan] （[bold]{len(_blocks)}[/bold] 个板块）:")
+        _CSL.print(Pretty(_blocks, max_length=max_to_show) if len(_blocks) > max_to_show else list(_blocks))
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -3677,12 +3677,12 @@ def blocks_2_stocks(_ctx: click.Context,
     blocks: list[str],
 ):
     """把 blocks 直接放到 stocks 中，方便后续管道使用"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
     try:
         return {'stocks': blocks}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -3695,7 +3695,7 @@ def read_from_file(_ctx: click.Context,
                    key: str,
                    **kwargs):
     """从文件中读取 stocks 列表（每行一个股票代码）"""
-    CONSOLE = _ctx.obj['console'] # type: Console
+    _CSL = _ctx.obj['console'] # type: Console
 
     try:
         stocks = []
@@ -3710,7 +3710,7 @@ def read_from_file(_ctx: click.Context,
                 stocks = [str(code).strip() for code in df[first_col] if str(code).strip()]
                 df = df[df[first_col].isin(stocks)]  # 过滤掉空值或无效股票代码的行
             else:
-                CONSOLE.print(f"[yellow]⚠️ Parquet 文件 {file_path} 中未找到有效的股票代码[/yellow]")
+                _CSL.print(f"[yellow]⚠️ Parquet 文件 {file_path} 中未找到有效的股票代码[/yellow]")
                 return
 
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -3731,10 +3731,10 @@ def read_from_file(_ctx: click.Context,
                     elif 'data' in data and isinstance(data['data'], list):
                         stocks = [str(item).strip() for item in data['data'] if str(item).strip()]
                     else:
-                        CONSOLE.print(f"[yellow]⚠️ JSON 文件 {file_path} 中未找到有效的股票代码列表[/yellow]")
+                        _CSL.print(f"[yellow]⚠️ JSON 文件 {file_path} 中未找到有效的股票代码列表[/yellow]")
                         return
                 else:
-                    CONSOLE.print(f"[yellow]⚠️ JSON 文件 {file_path} 格式不支持[/yellow]")
+                    _CSL.print(f"[yellow]⚠️ JSON 文件 {file_path} 格式不支持[/yellow]")
                     return
             elif file_path.endswith('.xlsx') or file_path.endswith('.xls'):
                 import pandas as pd
@@ -3744,21 +3744,21 @@ def read_from_file(_ctx: click.Context,
                     first_col = df.columns[0]
                     stocks = [str(code).strip() for code in df[first_col] if str(code).strip()]
                 else:
-                    CONSOLE.print(f"[yellow]⚠️ Excel 文件 {file_path} 中未找到有效的股票代码[/yellow]")
+                    _CSL.print(f"[yellow]⚠️ Excel 文件 {file_path} 中未找到有效的股票代码[/yellow]")
                     return
             elif file_path.endswith('.txt'):
                 stocks = [line.strip() for line in f if line.strip()]
 
         if not stocks:
-            CONSOLE.print(f"[yellow]⚠️ 文件 {file_path} 中未找到有效的股票代码[/yellow]")
+            _CSL.print(f"[yellow]⚠️ 文件 {file_path} 中未找到有效的股票代码[/yellow]")
             return
-        CONSOLE.print(f"从文件 {file_path} 读取到 [bold]{len(stocks)}[/bold] 个股票代码")
+        _CSL.print(f"从文件 {file_path} 读取到 [bold]{len(stocks)}[/bold] 个股票代码")
 
         if df is not None:
             return {key: stocks, 'df': df}
         return {key: stocks}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
@@ -3786,12 +3786,12 @@ def save_to_file(_ctx: click.Context,
         fl | sf -f D:/data/filtered.xlsx                  # → 绝对路径
         sf -f result.json -k 'my_stocks'                 # → output/result.json
     """
-    CONSOLE = _ctx.obj['console']  # type: Console
+    _CSL = _ctx.obj['console']  # type: Console
 
     try:
         stocks_list = list(stocks)
         if not stocks_list:
-            CONSOLE.print("[red]未提供任何股票代码[/red]")
+            _CSL.print("[red]未提供任何股票代码[/red]")
             return
 
         # 无路径分隔符 → 自动加 output/ 前缀
@@ -3803,7 +3803,7 @@ def save_to_file(_ctx: click.Context,
         # 后缀名 → 文件类型
         ext = os.path.splitext(file_path)[1].lower()
         if ext not in ('.txt', '.csv', '.xlsx', '.json'):
-            CONSOLE.print(f"[red]不支持的文件后缀: {ext}（支持 .txt / .csv / .xlsx / .json）[/red]")
+            _CSL.print(f"[red]不支持的文件后缀: {ext}（支持 .txt / .csv / .xlsx / .json）[/red]")
             return
 
         if ext == '.txt':
@@ -3824,10 +3824,10 @@ def save_to_file(_ctx: click.Context,
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump({key: stocks_list}, f, ensure_ascii=False, indent=2)
 
-        CONSOLE.print(f"✅ 已保存 [green]{len(stocks_list)}[/green] 只股票到 [yellow]{file_path}[/yellow]")
+        _CSL.print(f"✅ 已保存 [green]{len(stocks_list)}[/green] 只股票到 [yellow]{file_path}[/yellow]")
 
         if cache_stocks:
             return {'stocks': stocks_list}
 
     except Exception as e:
-        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        _CSL.print_exception(extra_lines=5, show_locals=True)
