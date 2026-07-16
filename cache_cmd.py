@@ -785,6 +785,22 @@ def get_stock_name(code: str, default=None) -> Optional[str]:
         return _STOCK_2_NAME.get(code, default)
 
 
+# 板块名称缓存
+_BLOCK_2_NAME = {}
+
+def cache_block_name(c2n: Dict[str, str]):
+    """追加板块（code -> name）"""
+    global _BLOCK_2_NAME
+    with _LOCK:
+        _BLOCK_2_NAME.update(c2n)
+
+def get_block_name(code: str, default=None) -> Optional[str]:
+    """获取板块名称"""
+    global _BLOCK_2_NAME
+    with _LOCK:
+        return _BLOCK_2_NAME.get(code, default)
+
+
 def cache_st_stock_name(c2n: Dict[str, str]):
     """追加 ST 股个股"""
     global _ST_STOCK_2_NAME

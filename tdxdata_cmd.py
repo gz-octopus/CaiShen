@@ -3599,11 +3599,13 @@ def _example(_ctx: click.Context,
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS,
               help='股票代码列表（管道中由上游自动注入，也可手动传参）')
 @click.option('--verbose', '-v', 'verbose', is_flag=True, help='详细模式')
+@click.option('--with-name', '-wn', 'is_with_name', is_flag=True, help='股票代码是否带上股票名称')
 @click.option('--max-to-show', '-max', 'max_to_show', default=20, show_default=True, type=int, help='最多显示多少条数据')
 @click.pass_context
 def print_pipe(_ctx: click.Context,
     stocks: list[str],
     verbose: bool,
+    is_with_name: bool,
     max_to_show: int,
 ):
     """打印管道接收到的数据（用于测试管道功能）
@@ -3623,7 +3625,12 @@ def print_pipe(_ctx: click.Context,
     # ── 1. 简单类型：由 click.option 接收（管道引擎自动注入） ──
     if stocks:
         _CSL.print(f"\n[bold cyan]📦 stocks[/bold cyan] （[bold]{len(stocks)}[/bold] 只）:")
-        _CSL.print(Pretty(stocks, max_length=max_to_show) if len(stocks) > max_to_show else list(stocks))
+        if is_with_name:
+            stock_with_names = [f"{code}|{get_stock_name(code)}" for code in stocks]
+            print_dataframe(pd.DataFrame(stock_with_names, columns=['股票代码|名称']), title='stocks 列表', printer=_CSL.print)
+            # _CSL.print(Pretty(stock_with_names, max_length=max_to_show) if len(stock_with_names) > max_to_show else stock_with_names)
+        else:
+            _CSL.print(Pretty(stocks, max_length=max_to_show) if len(stocks) > max_to_show else list(stocks))
     else:
         _CSL.print("[dim]📦 stocks: (空)[/dim]")
 

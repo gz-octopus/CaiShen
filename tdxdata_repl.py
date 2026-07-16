@@ -28,7 +28,7 @@ from difoss_stock_util.metric_data.history_data_1d import *
 from difoss_stock_util.stock_util import is_st_stock
 from difoss_stock_util.color_log_util import *
 
-from cache_cmd import cache_stock_name, cache_st_stock_name
+from cache_cmd import cache_stock_name, cache_st_stock_name, cache_block_name
 from typing import Dict
 
 # DEBUG:
@@ -60,6 +60,15 @@ def cache_stock_name_of_market(market: str = None):
     click.echo(f"✅ 缓存 A股（{len(code2name)}只）股票代码和名称")
 
 
+def cache_all_blocks_name():
+    """缓存所有通达信板块 code -> name"""
+    sectors = tq.get_sector_list(list_type=1)
+    if sectors and isinstance(sectors, list):
+        c2n = {s['Code']: s['Name'] for s in sectors if isinstance(s, dict)}
+        cache_block_name(c2n)
+        click.echo(f"✅ 缓存 A股板块（{len(c2n)}个）代码和名称")
+
+
 # 初始化
 def init(_ctx: click.Context):
     
@@ -82,6 +91,7 @@ def init(_ctx: click.Context):
         tq.initialize(__file__)
         click.echo("✅ TQ 初始化成功")
         cache_stock_name_of_market()
+        cache_all_blocks_name()
 
     except Exception as e:
         click.echo(f"⚠️ TQ 初始化失败: {e}", err=True)
