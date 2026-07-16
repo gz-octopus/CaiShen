@@ -812,7 +812,7 @@ def _query_table_stocks(db_url: str, table_name: str, console: Console,
               help='替换已存在的记录（默认跳过重复键）')
 @click.option('--list-stocks', '-ls', 'list_stocks', is_flag=True,
               help='列出 -t 指定表中的所有股票代码（而非写入数据），可管道给下游')
-@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+@click.option('--date', '-d', 'date', type=DATETIME, default=datetime.now(),
               help='日期（仅 -ls 时生效，过滤指定日期的数据，默认不过滤）')
 @click.option('--db-type', '-db', 'db_type',
               default=None,
