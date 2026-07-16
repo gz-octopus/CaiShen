@@ -1700,7 +1700,7 @@ def get_stocks(_ctx: click.Context,
               type=click.Choice(['概念', '行业', '地域', '风格', '自定义']),
               help='板块类型')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的板块详情）')
-@click.option('--max-to-show', '-max', 'max_to_show', default=30, show_default=True, type=int,
+@click.option('--max-to-show', '-max', 'max_to_show', default=300, show_default=True, type=int,
               help='最多显示多少条板块记录')
 @click.pass_context
 def stock_block_stat(_ctx: click.Context,
@@ -1865,15 +1865,15 @@ def stock_block_stat(_ctx: click.Context,
         _CSL.print(f"\n[bold]📊 板块归属统计[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
                       f"个股: [yellow]{len(stocks_list)}[/yellow] 只，"
                       f"涉及板块: [yellow]{len(block_2_infos.keys())}[/yellow] 个")
-        print_dataframe(df_stats.head(max_to_show),
-                        title=f"板块聚合（按个股数降序，前 {min(max_to_show, len(df_stats))} 条）",
-                        show_footer=True, printer=_CSL.print,
+        print_dataframe(df_stats,
+                        title=f"板块聚合（按个股数降序，共 {len(df_stats)} 个板块）",
+                        table_max_rows=max_to_show, show_footer=True, printer=_CSL.print,
                         sum_cols=['个股数', '涨(家)', '涨停', '跌(家)', '跌停', '主买净额(亿)', '主力净额(亿)'],
                         avg_cols=['均涨幅%', '换手率%', '量比'])
 
         if is_verbose:
             df_detail = pd.DataFrame(stock_details)
-            print_dataframe(df_detail, title="个股详情",
+            print_dataframe(df_detail, title="个股详情", sum_cols=['所属板块数'], avg_cols=['所属板块数', '涨幅%'], table_max_rows=max_to_show,
                             show_footer=True, printer=_CSL.print)
 
         # ── 管道返回 ──
@@ -1899,7 +1899,7 @@ def stock_block_stat(_ctx: click.Context,
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的逐日 K 线明细）')
 @click.option('--top', '-top', 'top_n', type=int, default=0, show_default=True,
               help='仅显示涨/跌幅前 N 名（0 表示全部）')
-@click.option('--max-to-show', '-max', 'max_to_show', default=30, show_default=True, type=int,
+@click.option('--max-to-show', '-max', 'max_to_show', default=200, show_default=True, type=int,
               help='每张表最多显示多少条记录')
 @click.pass_context
 def stock_stat(_ctx: click.Context,
@@ -2064,12 +2064,11 @@ def stock_stat(_ctx: click.Context,
                 if top_n > 0:
                     half = top_n // 2 if top_n > 1 else 1
                     df_day = pd.concat([df_day.head(half), df_day.tail(top_n - half)]).drop_duplicates()
-                else:
-                    df_day = df_day.head(max_to_show)
 
                 day_str = day.strftime('%Y%m%d') if hasattr(day, 'strftime') else str(day)[:10]
                 print_dataframe(df_day,
-                                title=f"📅 {day_str} 持仓盈亏（{len(df_day)} 只，显示前 {min(max_to_show, len(df_day))} 条）",
+                                title=f"📅 {day_str} 持仓盈亏（共 {len(day_rows)} 只，显示前 {min(max_to_show, len(df_day))} 条）",
+                                table_max_rows=max_to_show,
                                 avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
                                 show_footer=True, printer=_CSL.print)
         else:
@@ -2110,12 +2109,14 @@ def stock_stat(_ctx: click.Context,
                 half = top_n // 2 if top_n > 1 else 1
                 df_show = pd.concat([df_summary.head(half), df_summary.tail(top_n - half)]).drop_duplicates()
             else:
-                df_show = df_summary.head(max_to_show)
+                df_show = df_summary
 
             _CSL.print(f"\n统计完成: [green]{len(stock_results)}[/green] / {len(stocks_list)} 只")
             print_dataframe(df_show,
                             title=f"持仓盈亏（买入日 {entry_date_str}，截止 {end_date_str}，"
-                                  f"共 {len(df_summary)} 只，显示前 {min(max_to_show, len(df_show))} 条）",
+                                  f"共 {len(df_summary)} 只"
+                                  + (f"，显示涨跌前 {top_n} 名" if top_n > 0 else ""),
+                            table_max_rows=max_to_show,
                             sum_cols=['持有天数'],
                             avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
                             show_footer=True, printer=_CSL.print)
@@ -2130,9 +2131,9 @@ def stock_stat(_ctx: click.Context,
                 df_detail = pd.DataFrame(pnl_list).set_index('date')
                 df_detail = df_detail.rename(columns={'close_pnl': '收盘盈利%', 'high_pnl': '最高盈利%', 'low_pnl': '最低盈利%'})
                 daily_cols = ['close', '收盘盈利%', '最高盈利%', '最低盈利%']
-                print_dataframe(df_detail[daily_cols].head(max_to_show),
-                                title=f"{sc.short_code} {get_stock_name(full_code, '')} 逐日明细（前 {min(max_to_show, len(pnl_list))} 天）",
-                                show_footer=True, printer=_CSL.print)
+                print_dataframe(df_detail[daily_cols],
+                                title=f"{sc.short_code} {get_stock_name(full_code, '')} 逐日明细（共 {len(pnl_list)} 天）",
+                                table_max_rows=max_to_show, show_footer=True, printer=_CSL.print)
 
         # ── 管道返回 ──
         if cache_stocks or _is_pipe_producer:
@@ -2160,7 +2161,7 @@ def stock_stat(_ctx: click.Context,
               help='主力净流入(万元) 最大值（含）')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的资金数据）')
 @click.option('--with-name', '-wn', 'is_with_name', is_flag=True, help='股票代码带上股票名称（如 603358|华达科技）')
-@click.option('--max-to-show', '-max', 'max_to_show', default=30, show_default=True, type=int,
+@click.option('--max-to-show', '-max', 'max_to_show', default=200, show_default=True, type=int,
               help='最多显示多少条结果')
 @click.pass_context
 def filter_capital_flow(_ctx: click.Context,
@@ -2290,17 +2291,17 @@ def filter_capital_flow(_ctx: click.Context,
         if is_verbose:
             df_detail = pd.DataFrame(stock_details)
             df_sorted = df_detail.sort_values('主买净额(万)', ascending=False)
-            print_dataframe(df_sorted.head(max_to_show),
-                            title=f"个股资金流详情（前 {min(max_to_show, len(df_sorted))} 条）",
+            print_dataframe(df_sorted,
+                            title=f"个股资金流详情（共 {len(df_sorted)} 条）",
                             show_footer=True, printer=_CSL.print)
 
         # 打印通过筛选的股票列表
         if passed_stocks:
             _CSL.print(f"符合条件个股: ", end='')
             if is_with_name:
-                stocks_to_show = [f"{sc}|{get_stock_name(sc)}" for sc in list(passed_stocks)[:max_to_show]]
+                stocks_to_show = [f"{sc}|{get_stock_name(sc)}" for sc in list(passed_stocks)]
             else:
-                stocks_to_show = list(passed_stocks)[:max_to_show]
+                stocks_to_show = list(passed_stocks)
             _CSL.print(Pretty(stocks_to_show, max_length=max_to_show))
 
         # ── 管道返回 ──
