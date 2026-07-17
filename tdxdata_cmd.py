@@ -3842,3 +3842,147 @@ def save_to_file(_ctx: click.Context,
 
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+# ---------------------------------------------------------------------------------------------
+# 全市场日线批量同步（断点续传，供 quant_lab 研究内核建库）
+
+def _all_a_stock_codes(console: Console, include_delisted: bool = True) -> list[str]:
+    """全市场 A 股代码清单（复用 get_stocks 的 tq.get_stock_list 取数路径）
+
+    返回全码格式：['600519.SH', ...]，排序稳定（断点续传依赖稳定顺序）。
+    """
+    codes: set[str] = set()
+
+    res = tq.get_stock_list(market='5', list_type=1)  # 市场 5 = 所有A股（在市）
+    if res:
+        if isinstance(res[0], dict):
+            cache_stock_name({x.get('Code'): x.get('Name') for x in res})
+        codes.update(_get(x) for x in res if x)
+    console.print(f"在市 A 股: [green]{len(codes)}[/green] 只")
+
+    if include_delisted:
+        # 通达信系统板块中的退市股池（板块名以客户端实际为准，逐个尝试，取不到不阻断）
+        n_before = len(codes)
+        for block_name in ('已退市', '退市股票', '退市整理'):
+            try:
+                res = tq.get_stock_list_in_sector(block_code=block_name, block_type=0, list_type=0)
+                if res:
+                    codes.update(_get(x) for x in res if x)
+                    console.print(f"退市股池 [yellow]{block_name}[/yellow]: +{len(res)} 只")
+            except Exception as ex:
+                W(f"退市股池 {block_name} 获取失败: {ex}")
+        if len(codes) == n_before:
+            W("未取到任何退市股池（TDX 端可能无对应系统板块），退市股覆盖以 gmd 单股实测为准")
+
+    return sorted(codes)
+
+
+def _fetch_daily_df(sym: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+    """单只股票日线（前复权）→ 列含 Open/High/Low/Close/Volume/Amount 的 DataFrame
+
+    复用 get_market_data 命令 --save-db 分支的同一路径：
+    tq.get_market_data → transform_field_to_stock_fast，产出结构与 _save_to_db 入参一致。
+    """
+    dict_df = tq.get_market_data(
+        field_list=['Open', 'High', 'Low', 'Close', 'Volume', 'Amount'],
+        stock_list=[sym],
+        start_time=f"{start_date}000000",
+        end_time=f"{end_date}235959",
+        count=-1,
+        dividend_type='front',
+        period='1d',
+        fill_data=False,  # 必须 False：True 会给停牌日填充假数据（见文件头 v0.1.2 备注）
+    )
+    if not dict_df:
+        return None
+    stock_2_df = transform_field_to_stock_fast(dict_df)
+    if not stock_2_df:
+        return None
+    return stock_2_df.get(sym, next(iter(stock_2_df.values())))
+
+
+def _ensure_yearly_partitions(db_url: str, start_year: int, end_year: int, console: Console):
+    """确保 history_data_1d 各年度分区存在（PG 专用）
+
+    背景：HistoryData1D 是 PARTITION BY RANGE (trade_date) 的分区表，init_db 只建父表；
+    分区缺失时插入报"没有为行找到分区"，且会被批量插入的异常兜底静默吞掉（成功 0 条）。
+    旧版 difoss_stock_util 有 create_yearly_partition（见 test/t_xtquant.py），现版本已移除，故此处自建。
+    已有分区覆盖对应年份时 CREATE 报 overlap 错误，捕获忽略（预期行为）。
+    """
+    _get_model_for_table('history_data_1d').init_db(db_url)  # 确保父表已建（幂等）
+    engine = create_engine(db_url)
+    created = []
+    with engine.connect() as conn:
+        for year in range(start_year, end_year + 1):
+            sql = (f"CREATE TABLE IF NOT EXISTS history_data_1d_y{year} "
+                   f"PARTITION OF history_data_1d "
+                   f"FOR VALUES FROM ({year}0101) TO ({year + 1}0101)")  # trade_date 为 IntegerDate（YYYYMMDD 整数）
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                created.append(year)
+            except Exception:
+                conn.rollback()  # 已有分区覆盖该范围（overlap），跳过
+    if created:
+        console.print(f"[dim]已确保年度分区: {created[0]}~{created[-1]}[/dim]")
+
+
+@command_with_abbrev(abbrev='sync', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--start', '-s', 'start_date', default='20150101', show_default=True, help='起始日期 YYYYMMDD')
+@click.option('--end', '-e', 'end_date', default=None, help='结束日期 YYYYMMDD，默认今天')
+@click.option('--resume/--no-resume', default=True, show_default=True, help='断点续传（读 sync_progress.json）')
+@click.option('--include-delisted/--no-include-delisted', default=True, show_default=True,
+              help='包含退市股（防幸存者偏差）')
+@click.pass_context
+def sync_history(_ctx: click.Context, start_date: str, end_date: str | None,
+                 resume: bool, include_delisted: bool):
+    """全市场日线批量同步 → history_data_1d（前复权，断点续传，缩写: sync）
+
+    用法示例：
+        sync-history -s 20150101          # 全量同步（断点续传）
+        sync -s 20250101 --no-resume      # 忽略进度重跑
+    """
+    from pathlib import Path
+
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
+
+    try:
+        end_date = end_date or datetime.now().strftime('%Y%m%d')
+        progress_file = Path('sync_progress.json')
+        done: set = set(json.loads(progress_file.read_text(encoding='utf-8'))) \
+            if (resume and progress_file.exists()) else set()
+
+        # PG 分区表：先确保目标年份分区存在，否则插入静默失败（成功 0 条）
+        if DB_TYPE in ('pg', 'postgresql'):
+            _ensure_yearly_partitions(_assemble_db_url(DB_TYPE, _CFG),
+                                      int(start_date[:4]), int(end_date[:4]) + 1, _CSL)
+
+        stock_list = _all_a_stock_codes(_CSL, include_delisted=include_delisted)
+        todo = [s for s in stock_list if s not in done]
+        _CSL.print(f"待同步 [green]{len(todo)}[/green]/{len(stock_list)} 只，区间 {start_date}~{end_date}")
+
+        fail: list[str] = []
+        try:
+            for i, sym in enumerate(todo, 1):
+                try:
+                    df = _fetch_daily_df(sym, start_date, end_date)
+                    if df is not None and len(df):
+                        _save_to_db(df, sym, 'history_data_1d', _CSL, _CFG, db_type=DB_TYPE)
+                    done.add(sym)
+                except Exception as ex:
+                    fail.append(sym)
+                    W(f"{sym} 同步失败: {ex}", _level='sync')
+                if i % 50 == 0:
+                    progress_file.write_text(json.dumps(sorted(done)), encoding='utf-8')
+                    _CSL.print(f"  进度 {i}/{len(todo)}，失败 {len(fail)}")
+                    sleep(0.5)  # 限速，避免打爆本地 TDX 服务
+        finally:
+            # Ctrl+C 中断也持久化进度，保证断点续传
+            progress_file.write_text(json.dumps(sorted(done)), encoding='utf-8')
+
+        _CSL.print(f"完成：成功 [green]{len(done)}[/green]，失败 [red]{len(fail)}[/red]"
+                   + (f": {fail[:20]}" if fail else ""))
+    except Exception:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
