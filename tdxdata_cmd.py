@@ -1460,27 +1460,36 @@ def get_sector_list(_ctx: click.Context,
             mask = df['Name'].str.contains(pattern, na=False)
             df_filtered = df[mask].copy()
 
-            print_dataframe(df_filtered, title=f'含有 {contains} 的板块（{len(df_filtered)} / {len(df)}）', printer=_CSL.print)
-
             if cache_stocks or is_verbose or _is_pipe_producer:
                 stocks_in_filtered_sectors = set()
                 blocks_in_filtered = set(df_filtered['Code'].tolist())
 
-                # 直接遍历过滤后的 DataFrame
+                # 遍历板块获取成份股，同时填充 stocks.num 和 stocks 列
+                stocks_num_col = []
+                stocks_list_col = []
                 for _, row in df_filtered.iterrows():
                     sector_code = row['Code']
                     res = tq.get_stock_list_in_sector(block_code=sector_code, block_type=0, list_type=1)
-
-                    if is_verbose:
-                        _CSL.print(f"板块 [yellow]{sector_code}[/yellow] ({row['Name']}) 中含有 {len(res)} 只个股：", end='')
-                        _CSL.print([f"{r.get('Code')}|{r.get('Name')}" for r in res if isinstance(r, dict)])
+                    cnt = len(res) if res else 0
+                    stocks_num_col.append(cnt)
+                    stocks_list_col.append(
+                        [f"{r.get('Code')}|{r.get('Name')}" for r in res if isinstance(r, dict)]
+                        if res else []
+                    )
 
                     if (cache_stocks or _is_pipe_producer) and res:
                         stocks_in_filtered_sectors.update([_get(x) for x in res if x])
 
-                if cache_stocks or cache_blocks or _is_pipe_producer:
-                    return {'stocks': stocks_in_filtered_sectors,
-                            'blocks': blocks_in_filtered}
+                df_filtered['stocks.num'] = stocks_num_col
+                df_filtered['stocks'] = stocks_list_col
+
+            print_dataframe(df_filtered,
+                            title=f'含有 {contains} 的板块（{len(df_filtered)} / {len(df)}）',
+                            printer=_CSL.print)
+
+            if cache_stocks or cache_blocks or _is_pipe_producer:
+                return {'stocks': stocks_in_filtered_sectors,
+                        'blocks': blocks_in_filtered}
 
         else:
             if _is_pipe_producer:
@@ -2576,7 +2585,6 @@ def get_user_sector(
 
             # 创建 DataFrame 并按 stock.num 排序
             df = pd.DataFrame(sector_detail_infos)
-            D("[test]", df=df)
             df_sorted = df.sort_values(by='stock.num', ascending=False)
             print_dataframe(df_sorted, f'自定义板块概要{f"（过滤含有 {contains} 的板块）" if sectors_filtered else ""}',
                             printer=_CSL.print)
@@ -3126,9 +3134,13 @@ def formula(
                 # zb 始终打印每股票详情；xg 仅在 verbose 时打印
                 if _is_zb or verbose:
                     if not df_cleaned.empty:
-                        print_dataframe(df_cleaned,
-                                        title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（已过滤空值）",
-                                        table_max_rows=max_to_show, printer=_CSL.print)
+                        if is_save_db:
+                            # 存数据库时尽量进行复杂打印以节省时间
+                            _CSL.print(df_cleaned)
+                        else:
+                            print_dataframe(df_cleaned,
+                                            title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（已过滤空值）",
+                                            table_max_rows=max_to_show, printer=_CSL.print)
 
                 if code_2_df is not None:
                     code_2_df[full_code] = df_cleaned if not df_cleaned.empty else df
@@ -3867,3 +3879,116 @@ def save_to_file(_ctx: click.Context,
 
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+              help='日期（默认从 from_block_name 中提取，如 吸完·首倍阳_5.20260710 → 20260710）')
+@click.option('--from-block-name', '-fb', 'from_block_name', required=True,
+              help='来源板块名称（从中提取个股，支持 -c 模糊匹配）')
+@click.option('--to-block-tip', '-tbt', 'to_block_tip', default='可买入',
+              help='目标板块后缀（如 "可买入" → XXXX.可买入.YYYYMMDD）')
+@click.option('--zm-min', '-zm-min', 'zm_min', type=float, default=None,
+              help='主买净额(万元) 最小值')
+@click.option('--zm-max', '-zm-max', 'zm_max', type=float, default=None,
+              help='主买净额(万元) 最大值')
+@click.option('--zl-min', '-zl-min', 'zl_min', type=float, default=None,
+              help='主力净流入(万元) 最小值')
+@click.option('--zl-max', '-zl-max', 'zl_max', type=float, default=None,
+              help='主力净流入(万元) 最大值')
+@click.option('--keep-zt', '-zt', 'keep_zt', is_flag=True, default=False, help='保留涨停股')
+@click.option('--keep-not-zt', '-nzt', 'keep_not_zt', is_flag=True, default=False, help='保留非涨停股')
+@click.option('--keep-dt', '-dt', 'keep_dt', is_flag=True, default=False, help='保留跌停股')
+@click.option('--keep-not-dt', '-ndt', 'keep_not_dt', is_flag=True, default=False, help='保留非跌停股')
+@click.pass_context
+def filter_to_block(_ctx: click.Context,
+    date: datetime | None,
+    from_block_name: str,
+    to_block_tip: str,
+    zm_min: float | None,
+    zm_max: float | None,
+    zl_min: float | None,
+    zl_max: float | None,
+    keep_zt: bool,
+    keep_not_zt: bool,
+    keep_dt: bool,
+    keep_not_dt: bool,
+):
+    """从自定义板块取股 → 资金流筛选 → 涨跌停过滤 → 存入新板块
+
+    等价于管道链: gus -c <from> | fcf -d <date> ... | fl ... | us -a create -n <to>
+    所有步骤在一次调用中完成。
+
+    使用示例：
+        ftb -fb 吸完·首倍阳_5.20260710 -zm-min 0 -zl-min 0 -nzt -ndt
+            → gus → fcf(d=20260710) → fl(nzt+ndt) → 创建板块「吸完·首倍阳_5.可买入.20260710」
+
+        ftb -fb 吸完·首倍阳_5.20260710 -zt -tbt 涨停票
+            → 仅保留涨停股，存入「吸完·首倍阳_5.涨停票.20260710」
+    """
+    _CSL = _ctx.obj['console']  # type: Console
+    import re
+
+    # ── 提取日期：优先用显式 --date，否则从 from_block_name 中取最后的8位数字 ──
+    if date is None:
+        m = re.search(r'(\d{8})', from_block_name)
+        if m:
+            date_str = m.group(1)
+            from difoss_stock_util.time_util import TimeUtils
+            date = TimeUtils.str_to_datetime(date_str)
+        if date is None:
+            _CSL.print(f"[red]无法从板块名 '{from_block_name}' 提取日期，请使用 -d 指定[/red]")
+            return
+
+    trading_date_str = date.strftime('%Y%m%d')
+    _CSL.print(f"\n[bold]🔗 一键筛选入库[/bold] — 日期: [yellow]{trading_date_str}[/yellow]")
+
+    # ── Step 1: 从自定义板块获取个股 ──
+    _CSL.print(f"[bold]Step 1/4[/bold] 从板块 [yellow]{from_block_name}[/yellow] 获取个股...")
+    result = _ctx.invoke(get_user_sector, contains=[from_block_name], cache_stocks=True)
+    stocks = result.get('stocks', set()) if isinstance(result, dict) else set()
+    if not stocks:
+        _CSL.print(f"[red]板块 '{from_block_name}' 中无个股[/red]")
+        return
+    _CSL.print(f"   获取到 [green]{len(stocks)}[/green] 只个股")
+
+    # ── Step 2: 主力资金流筛选 ──
+    if any(v is not None for v in (zm_min, zm_max, zl_min, zl_max)):
+        _CSL.print(f"[bold]Step 2/4[/bold] 主力资金流筛选...")
+        result = _ctx.invoke(filter_capital_flow,
+                             stocks=list(stocks), date=date,
+                             zm_min=zm_min, zm_max=zm_max,
+                             zl_min=zl_min, zl_max=zl_max,
+                             cache_stocks=True)
+        stocks = result.get('stocks', set()) if isinstance(result, dict) else set()
+        if not stocks:
+            _CSL.print("[yellow]资金流筛选后无个股剩余[/yellow]")
+            return
+        _CSL.print(f"   剩余 [green]{len(stocks)}[/green] 只")
+    else:
+        _CSL.print(f"[dim]Step 2/4 资金流筛选: 未设置过滤条件，跳过[/dim]")
+
+    # ── Step 3: 涨跌停过滤 ──
+    if any([keep_zt, keep_not_zt, keep_dt, keep_not_dt]):
+        _CSL.print(f"[bold]Step 3/4[/bold] 涨跌停筛选...")
+        result = _ctx.invoke(filter_limit,
+                             stocks=list(stocks), date=date,
+                             keep_zt=keep_zt, keep_not_zt=keep_not_zt,
+                             keep_dt=keep_dt, keep_not_dt=keep_not_dt,
+                             cache_stocks=True)
+        stocks = result.get('stocks', set()) if isinstance(result, dict) else set()
+        if not stocks:
+            _CSL.print("[yellow]涨跌停筛选后无个股剩余[/yellow]")
+            return
+        _CSL.print(f"   剩余 [green]{len(stocks)}[/green] 只")
+    else:
+        _CSL.print(f"[dim]Step 3/4 涨跌停筛选: 未设置过滤条件，跳过[/dim]")
+
+    # ── Step 4: 构建目标板块名并创建 ──
+    # 规则：原板块名去掉末尾日期 → 加 to_block_tip → 加日期
+    base_name = re.sub(r'\.?\d{8}$', '', from_block_name)  # 去掉末尾的日期
+    to_block_name = f"{base_name}.{to_block_tip}.{trading_date_str}"
+    _CSL.print(f"[bold]Step 4/4[/bold] 创建板块 [yellow]{to_block_name}[/yellow] 并添加 {len(stocks)} 只个股")
+    _ctx.invoke(user_sector, action='create', name=to_block_name, stocks=list(stocks))
+
+    _CSL.print(f"\n✅ 完成！板块 [yellow]{to_block_name}[/yellow] 共 [green]{len(stocks)}[/green] 只个股")
