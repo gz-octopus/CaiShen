@@ -188,3 +188,40 @@ def some_command(_ctx: click.Context, stocks: list[str], ...):
 ## 安全注意事项
 
 `config.yaml` 中包含明文 API token 和数据库密码。注意不要将真实凭据提交到版本控制。建议使用环境变量替代敏感值，或将 `config.yaml` 加入 `.gitignore`。
+
+## Agent 调用（MCP）
+
+本项目的 MCP server 位于 `caishen_mcp/server.py`，通过 MCP 协议将 28 个数据工具暴露给 Claude Code。
+
+### 配置方式
+
+在 `.claude/settings.local.json` 中注册：
+
+```json
+{
+  "mcpServers": {
+    "caishen": {
+      "command": "python",
+      "args": ["D:/quant/CaiShen/caishen_mcp/server.py"]
+    }
+  }
+}
+```
+
+### 前置条件
+
+- 通达信客户端必须已打开并登录（TQ 组件依赖它）
+- PostgreSQL 服务已启动（入库操作需要）
+- `pip install mcp>=1.0.0`
+
+### Tool 分组速览
+
+| 分组 | Tool | 用途 |
+|------|------|------|
+| 公式 | `formula`, `formula_list_all`, `formula_multi` | 通达信公式计算/选股 + 可选入库 |
+| 数据 | `get_stock_metrics`, `get_market_data`, `get_stock_list`, `get_match_stkinfo`, `get_stock_info`, `get_more_info`, `get_market_snapshot`, `get_financial_data`, `get_divide_factors`, `get_ipo_info`, `get_gb_info`, `get_cb_info`, `get_trading_dates`, `get_gpjy_value`, `get_bkjy_value`, `get_scjy_value`, `stock_block_stat`, `stock_stat` | 行情、财务、交易数据查询 |
+| 板块 | `get_sector_list`, `get_stocks_in_sector`, `get_user_sector_list`, `get_user_sector_stocks` | 板块和成分股查询 |
+| 同步 | `sync_history` | 全市场日 K 同步到 PG |
+| 风险 | `slb_query`, `win_rate_report` | 扫雷宝风险分析 + 胜率报告 |
+
+Agent 通过 MCP 协议自动发现完整的 tool schema（参数名、类型、描述），无需手动查阅本文档的参数细节。
