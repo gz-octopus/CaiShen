@@ -523,7 +523,8 @@ def stock_block_stat(stocks: list[str] | None = None) -> str:
         console = Console(file=string_io, force_terminal=False)
         ctx = create_click_context(cfg, db_url, console)
 
-        _sbs(_ctx=ctx, stocks=_normalize_stocks(stocks) if stocks else None)
+        with ctx:
+            _sbs.callback(stocks=_normalize_stocks(stocks) if stocks else None)
         return safe_result("ok", summary="板块统计完成", detail=string_io.getvalue()[:2000])
     except RuntimeError as e:
         return safe_result("error", message=str(e))
@@ -551,7 +552,8 @@ def stock_stat(stocks: list[str] | None = None) -> str:
         console = Console(file=string_io, force_terminal=False)
         ctx = create_click_context(cfg, db_url, console)
 
-        _ss(_ctx=ctx, stocks=_normalize_stocks(stocks) if stocks else None)
+        with ctx:
+            _ss.callback(stocks=_normalize_stocks(stocks) if stocks else None)
         return safe_result("ok", summary="分类统计完成", detail=string_io.getvalue()[:2000])
     except RuntimeError as e:
         return safe_result("error", message=str(e))

@@ -35,8 +35,8 @@ def win_rate_report(
         console = Console(file=string_io, force_terminal=False)
         ctx = create_click_context(cfg, db_url, console)
 
-        _report(
-            ctx=ctx,
+        with ctx:
+            _report.callback(
             stocks=list(stocks) if stocks else [],
             start_date=datetime.strptime(start_date, "%Y-%m-%d") if start_date else datetime.now() - timedelta(days=3*365),
             end_date=datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now(),

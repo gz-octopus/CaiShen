@@ -39,9 +39,9 @@ def slb_query(
         console = Console(file=string_io, force_terminal=False)
         ctx = create_click_context(cfg, db_url, console)
 
-        _query_db(
-            _ctx=ctx,
-            db_type='pg',
+        with ctx:
+            _query_db.callback(
+                db_type='pg',
             date=datetime.strptime(date, "%Y-%m-%d") if date else None,
             stocks=list(stocks) if stocks else [],
             markets=[],

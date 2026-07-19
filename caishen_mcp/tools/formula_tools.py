@@ -92,10 +92,10 @@ def formula(
         console = Console(file=string_io, force_terminal=False)
         ctx = create_click_context(cfg, db_url, console)
 
-        _formula(
-            _ctx=ctx,
-            formula_type=formula_type,
-            stocks=flat_stocks,
+        with ctx:
+            _formula.callback(
+                formula_type=formula_type,
+                stocks=flat_stocks,
             count=count,
             period=period,
             dividend_type=dividend_type,
@@ -172,10 +172,10 @@ def formula_multi(
         console = Console(file=string_io, force_terminal=False)
         ctx = create_click_context(cfg, db_url, console)
 
-        _formula_multi(
-            _ctx=ctx,
-            stocks=stocks,
-            formula_type=formula_type,
+        with ctx:
+            _formula_multi.callback(
+                stocks=stocks,
+                formula_type=formula_type,
             name=name,
             args=args or [],
             return_count=return_count,

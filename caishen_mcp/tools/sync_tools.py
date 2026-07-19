@@ -36,9 +36,9 @@ def sync_history(
         console = Console(file=string_io, force_terminal=False)
         ctx = create_click_context(cfg, db_url, console)
 
-        _sync_history(
-            _ctx=ctx,
-            start_date=start_date,
+        with ctx:
+            _sync_history.callback(
+                start_date=start_date,
             end_date=end_date,
             resume=resume,
             include_delisted=include_delisted,
