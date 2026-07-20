@@ -1,7 +1,7 @@
 #!python3
 # coding: utf-8
 import pandas as pd
-from difoss_stock_util.rich_util.rich_table import print_dataframe
+from difoss_stock_util.rich_util.rich_table import print_dataframe, print_dataframe_plain
 
 if __name__ == "__main__":
     data = {
@@ -15,7 +15,12 @@ if __name__ == "__main__":
     df_test = pd.DataFrame(data)
 
     # 多级表头（含 . 的列名自动拆两行）
-    print_dataframe(df_test, title="持仓盈亏示例", show_index=True,
+    print_dataframe(df_test, title="持仓盈亏示例（rich.Table）", show_index=True,
+                    sum_cols=["收盘", "盈亏.收盘%"],
+                    avg_cols=["盈亏.收盘%", "盈亏.最高%"])
+    
+    # ASCII表
+    print_dataframe_plain(df_test, title="持仓盈亏示例（ASCII表）", show_index=True,
                     sum_cols=["收盘", "盈亏.收盘%"],
                     avg_cols=["盈亏.收盘%", "盈亏.最高%"])
 
