@@ -18,14 +18,33 @@ tdx:
   base_dir: D:/finance_tool_/new_tdx
 
 tushare:
-  token: ${TUSHARE_TOKEN:?请设置环境变量 TUSHARE_TOKEN，从 https://tushare.pro 获取}
+  token: ${TUSHARE_TOKEN}
 
 firecrawler:
-  api_key: ${FIRECRAWLER_API_KEY:?请设置环境变量 FIRECRAWLER_API_KEY}
+  api_key: ${FIRECRAWLER_API_KEY}
 
 mootdx:
   # ip: 112.74.214.43
-  ip: 115.238.56.198
+  ip: sztdx.gtjas.com
   port: 7709
 
 data_source: tdx
+
+# 银河证券.星耀数智
+amazing_data:
+  host: ${AD_HOST:101.230.159.234}
+  port: ${AD_HOST:8600}
+  username: ${AD_USERNAME}
+  password: ${AD_PASSWORD}
+
+# 博查
+bocha:
+  api_key: ${BOCHA_API_KEY}
+
+# TickFlow
+tickflow:
+  api_key: ${TF_API_KEY}
+
+# GS Quant
+gs_quant:
+  api_key: ${GS_QUANT_API_KEY}
