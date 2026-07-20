@@ -1928,9 +1928,9 @@ def stock_stat(_ctx: click.Context,
     """统计个股从某日收盘买入后的持仓盈亏表现
 
     以 --date 当日收盘价为买入成本，计算持有期内每天：
-    - 收盘盈亏（涨幅%）：(当日收盘 - 买入成本) / 买入成本 × 100
-    - 最高盈亏（涨幅%）：(当日最高 - 买入成本) / 买入成本 × 100
-    - 最低盈亏（跌幅%）：(当日最低 - 买入成本) / 买入成本 × 100
+    - 盈亏.收盘（涨幅%）：(当日收盘 - 买入成本) / 买入成本 × 100
+    - 盈亏.最高（涨幅%）：(当日最高 - 买入成本) / 买入成本 × 100
+    - 盈亏.最低（跌幅%）：(当日最低 - 买入成本) / 买入成本 × 100
 
     返回 {'stocks': 股票集合} 供管道下游使用。
 
@@ -2120,7 +2120,7 @@ def stock_stat(_ctx: click.Context,
                 _CSL.print("[yellow]无有效数据[/yellow]")
                 return
 
-            df_summary = pd.DataFrame(stock_results).sort_values('收盘盈亏%', ascending=False).reset_index(drop=True)
+            df_summary = pd.DataFrame(stock_results).sort_values('盈亏.收盘%', ascending=False).reset_index(drop=True)
 
             if top_n > 0:
                 half = top_n // 2 if top_n > 1 else 1
