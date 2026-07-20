@@ -1905,6 +1905,8 @@ def stock_block_stat(_ctx: click.Context,
               help='结束统计日期（默认：今天）')
 @click.option('--daily', '-dl', 'daily', is_flag=True,
               help='逐日输出模式：从买入日起每一天输出一个持仓盈亏 DataFrame')
+@click.option('--intraday', '-id', 'intraday', is_flag=True,
+              help='日内盈亏曲线（仅 -dl 时生效，需安装 plotext）')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的逐日 K 线明细）')
 @click.option('--top', '-top', 'top_n', type=int, default=0, show_default=True,
               help='仅显示涨/跌幅前 N 名（0 表示全部）')
@@ -1916,6 +1918,7 @@ def stock_stat(_ctx: click.Context,
     date: datetime | None,
     end_time: datetime | None,
     daily: bool,
+    intraday: bool,
     is_verbose: bool,
     top_n: int,
     max_to_show: int,
@@ -2062,15 +2065,15 @@ def stock_stat(_ctx: click.Context,
                         '代码': sc.short_code,
                         '名称': get_stock_name(full_code, ''),
                         '收盘': day_data['close'],
-                        '收盘盈亏%': day_data['close_pnl'],
-                        '最高盈亏%': day_data['high_pnl'],
-                        '最低盈亏%': day_data['low_pnl'],
+                        '盈亏.收盘%': day_data['close_pnl'],
+                        '盈亏.最高%': day_data['high_pnl'],
+                        '盈亏.最低%': day_data['low_pnl'],
                     })
 
                 if not day_rows:
                     continue
 
-                df_day = pd.DataFrame(day_rows).sort_values('收盘盈亏%', ascending=False).reset_index(drop=True)
+                df_day = pd.DataFrame(day_rows).sort_values('盈亏.收盘%', ascending=False).reset_index(drop=True)
                 if top_n > 0:
                     half = top_n // 2 if top_n > 1 else 1
                     df_day = pd.concat([df_day.head(half), df_day.tail(top_n - half)]).drop_duplicates()
@@ -2079,8 +2082,12 @@ def stock_stat(_ctx: click.Context,
                 print_dataframe(df_day,
                                 title=f"📅 {day_str} 持仓盈亏（共 {len(day_rows)} 只）",
                                 table_max_rows=max_to_show,
-                                avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
+                                avg_cols=['盈亏.收盘%', '盈亏.最高%', '盈亏.最低%'],
                                 show_footer=True, printer=_CSL.print)
+
+                # ── 日内盈亏曲线（需 plotext）──
+                if intraday and all_passed:
+                    _plot_intraday(_ctx, day, all_passed, stock_pnl, _CSL)
         else:
             # ── Step 3b: 最终汇总模式 ──
             stock_results = []
@@ -2101,10 +2108,10 @@ def stock_stat(_ctx: click.Context,
                     '买入日': first['date'].strftime('%Y%m%d') if hasattr(first['date'], 'strftime') else str(first['date']),
                     '买入价': round(info['entry_close'], 2),
                     '最新收盘': latest['close'],
-                    '收盘盈亏%': latest['close_pnl'],
-                    '最高盈亏%': max_high,
+                    '盈亏.收盘%': latest['close_pnl'],
+                    '盈亏.最高%': max_high,
                     '最高日': high_day['date'].strftime('%Y%m%d') if hasattr(high_day['date'], 'strftime') else str(high_day['date']),
-                    '最低盈亏%': min_low,
+                    '盈亏.最低%': min_low,
                     '最低日': low_day['date'].strftime('%Y%m%d') if hasattr(low_day['date'], 'strftime') else str(low_day['date']),
                     '持有天数': len(pnl_list),
                 })
@@ -2127,7 +2134,7 @@ def stock_stat(_ctx: click.Context,
                                   + (f"，显示涨跌前 {top_n} 名" if top_n > 0 else ""),
                             table_max_rows=max_to_show,
                             sum_cols=['持有天数'],
-                            avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
+                            avg_cols=['盈亏.收盘%', '盈亏.最高%', '盈亏.最低%'],
                             show_footer=True, printer=_CSL.print)
 
         # ── verbose: 逐 K 线明细 ──
@@ -2138,8 +2145,8 @@ def stock_stat(_ctx: click.Context,
                     continue
                 sc = SecurityCode(full_code)
                 df_detail = pd.DataFrame(pnl_list).set_index('date')
-                df_detail = df_detail.rename(columns={'close_pnl': '收盘盈利%', 'high_pnl': '最高盈利%', 'low_pnl': '最低盈利%'})
-                daily_cols = ['close', '收盘盈利%', '最高盈利%', '最低盈利%']
+                df_detail = df_detail.rename(columns={'close_pnl': '盈亏.收盘%', 'high_pnl': '盈亏.最高%', 'low_pnl': '盈亏.最低%'})
+                daily_cols = ['close', '盈亏.收盘%', '盈亏.最高%', '盈亏.最低%']
                 print_dataframe(df_detail[daily_cols],
                                 title=f"{sc.short_code} {get_stock_name(full_code, '')} 逐日明细（共 {len(pnl_list)} 天）",
                                 table_max_rows=max_to_show, show_footer=True, printer=_CSL.print)
@@ -2337,6 +2344,7 @@ def filter_capital_flow(_ctx: click.Context,
               help='保留跌停股')
 @click.option('--keep-not-dt', '-ndt', 'keep_not_dt', is_flag=True, default=False,
               help='保留非跌停股')
+@click.option('--without-st', '-nst', 'without_st', is_flag=True, help='排除ST')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式')
 @click.pass_context
 def filter_limit(_ctx: click.Context,
@@ -2346,6 +2354,7 @@ def filter_limit(_ctx: click.Context,
     keep_not_zt: bool,
     keep_dt: bool,
     keep_not_dt: bool,
+    without_st: bool,
     is_verbose: bool,
     cache_stocks: bool,
     stock_group_index: int,
@@ -2408,11 +2417,17 @@ def filter_limit(_ctx: click.Context,
 
         from difoss_stock_util.stock_util import calc_limit_price
         zt_stocks, dt_stocks, normal_stocks = set(), set(), set()
+        st_removed = set()
         kept = set()
 
         for full_code, df in stock_2_df.items():
             if df is None or df.empty:
                 continue
+
+            if without_st and is_st(full_code):
+                st_removed.add(full_code)
+                continue
+
             closes = df['Close'].values
             if len(closes) < 2:
                 continue
@@ -2442,8 +2457,11 @@ def filter_limit(_ctx: click.Context,
         _CSL.print(f"涨停: [red]{len(zt_stocks)}[/red] 只（保留 {len(zt_stocks & kept)}），"
                    f"跌停: [green]{len(dt_stocks)}[/green] 只（保留 {len(dt_stocks & kept)}），"
                    f"正常: [dim]{len(normal_stocks)}[/dim] 只，"
+                   + (f"ST剔除: [magenta]{len(st_removed)}[/magenta] 只，" if st_removed else "") +
                    f"最终保留: [yellow]{len(kept)}[/yellow] 只")
 
+        if is_verbose and st_removed:
+            _CSL.print(f"ST剔除股: {list(st_removed)[:20]}")
         if is_verbose and zt_stocks:
             _CSL.print(f"涨停股: {list(zt_stocks)[:20]}")
         if is_verbose and dt_stocks:
@@ -2454,6 +2472,88 @@ def filter_limit(_ctx: click.Context,
 
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+def _plot_intraday(_ctx, day, stock_codes: set, stock_pnl: dict, _CSL: Console):
+    """绘制日内盈亏曲线（5分钟K线），需 plotext"""
+    try:
+        import plotext as plt
+    except ImportError:
+        _CSL.print("[yellow]⚠ 需要安装 plotext: pip install plotext[/yellow]")
+        return
+
+    day_str = day.strftime('%Y%m%d') if hasattr(day, 'strftime') else str(day)[:10]
+
+    stocks_list = list(stock_codes)
+    if not stocks_list:
+        return
+
+    # 取1分钟K线（仅支持 count 模式，start_time/end_time 对分钟线无效）
+    dict_df = tq.get_market_data(
+        field_list=['Close'],
+        stock_list=stocks_list,
+        period='1m', count=240,
+        dividend_type='front', fill_data=False,
+    )
+    if not dict_df:
+        _CSL.print("[yellow]⚠ 无日内分钟线数据（可能需先 refresh_kline -p 1m）[/yellow]")
+        return
+    stock_2_df = transform_field_to_stock_fast(dict_df)
+
+    # 仅保留目标日期的分钟线
+    target_date = pd.Timestamp(day.date() if hasattr(day, 'date') else day)
+    curves = {}
+    for full_code, df in stock_2_df.items():
+        if df is None or df.empty:
+            continue
+        df_day = df[df.index.normalize() == target_date]
+        if df_day.empty:
+            continue
+        info = stock_pnl.get(full_code, {})
+        entry_close = info.get('entry_close', 0)
+        if entry_close == 0:
+            continue
+        closes = df_day['Close'].values
+        curves[full_code] = [(c - entry_close) / entry_close * 100 for c in closes]
+
+    if not curves:
+        _CSL.print("[yellow]无日内数据[/yellow]")
+        return
+
+    # 计算平均曲线
+    max_len = max(len(v) for v in curves.values())
+    avg_curve = [0.0] * max_len
+    for i in range(max_len):
+        vals = [c[i] for c in curves.values() if i < len(c)]
+        avg_curve[i] = sum(vals) / len(vals) if vals else 0.0
+
+    # 选表现最极端的 top N（按当日振幅排序）用于单独曲线
+    amp = [(code, max(curve) - min(curve)) for code, curve in curves.items()]
+    amp.sort(key=lambda x: x[1], reverse=True)
+    top_stocks = [code for code, _ in amp[:12]]
+
+    plt.clear_figure()
+    plt.theme('dark')
+    plt.title(f'{day_str} 日内盈亏曲线 (5m)')
+    plt.xlabel('时间')
+    plt.ylabel('盈亏%')
+
+    colors = ['cyan', 'green', 'yellow', 'magenta', 'red', 'blue',
+              'white', 'orange', 'teal', 'gold', 'pink', 'lime']
+    for i, code in enumerate(top_stocks):
+        curve = curves[code]
+        sc = SecurityCode(code)
+        label = f"{sc.short_code}"
+        plt.plot(curve, label=label, color=colors[i % len(colors)])
+
+    # 平均线（粗白线）
+    plt.plot(avg_curve, label='AVG', color='white', linewidth=2)
+
+    plt.canvas_color('black')
+    plt.axes_color('black')
+    plt.ticks_color('white')
+    plt.show()
+    _CSL.print(f"[dim]曲线数: {len(top_stocks)} + AVG（共 {len(curves)} 只）[/dim]")
 
 
 def _safe_float(val) -> float:
@@ -3129,7 +3229,7 @@ def formula(
                     if not df.empty:
                         print_dataframe(df,
                                         title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（未过滤空值）",
-                                        table_max_rows=max_to_show, printer=_CSL.print)
+                                        table_max_rows=max_to_show, printer=_CSL.print, sep='_')
 
                 # zb 始终打印每股票详情；xg 仅在 verbose 时打印
                 if _is_zb or verbose:
