@@ -33,7 +33,7 @@ IP = 'sztdx.gtjas.com'
 PORT = 7709
 
 CONSOLE = console.Console()
-
+CFG = None
 # ---------------------------------------------------------------------------------------------------
 def get_market_enum(market_str: str) -> int:
     market_str = market_str.upper()
@@ -240,5 +240,4 @@ def init(_ctx: click.Context):
 
 
 if __name__ == '__main__':
-    global CONSOLE
     repl_cli_main(on_init=init, console=CONSOLE)
