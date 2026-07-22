@@ -3695,9 +3695,9 @@ def get_stock_metrics(_ctx: click.Context,
                 indicator_key=indicator_key,
             )
 
-            # 限制返回条数（count > 0 时）
+            # 限制返回条数（count > 0 时取最早的 N 条，即从 start_time 开始数）
             if count > 0:
-                rows = rows[:count]
+                rows = rows[-count:]  # query 返回 DESC，[-count:] = 最旧 count 条
 
             if not rows:
                 _CSL.print(f"[dim]{full_code} {get_stock_name(full_code)} — 无数据[/dim]")
