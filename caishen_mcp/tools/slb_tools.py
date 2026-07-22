@@ -7,7 +7,7 @@ from datetime import datetime
 from rich.console import Console
 
 from caishen_mcp.server import mcp, get_server_state, require_tq
-from caishen_mcp.ctx_helper import safe_result, create_click_context
+from caishen_mcp.ctx_helper import log_tool_call, safe_result, create_click_context
 
 
 @mcp.tool()
@@ -31,6 +31,7 @@ def slb_query(
     """
     try:
         require_tq()
+        log_tool_call()
         cfg, db_url, _ = get_server_state()
 
         from slb_cmd import query_db as _query_db

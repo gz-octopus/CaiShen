@@ -8,7 +8,7 @@ import pandas as pd
 from rich.console import Console
 
 from caishen_mcp.server import mcp, get_server_state, require_tq
-from caishen_mcp.ctx_helper import safe_result, create_click_context, df_to_json_safe
+from caishen_mcp.ctx_helper import log_tool_call, safe_result, create_click_context, df_to_json_safe
 
 
 @mcp.tool()
@@ -20,6 +20,7 @@ def formula_list_all(formula_type: str = "zb") -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
 
         ft_int = {"zb": 0, "xg": 1, "exp": 2}.get(formula_type)
@@ -75,6 +76,7 @@ def formula(
     """
     try:
         require_tq()
+        log_tool_call()
         cfg, db_url, _ = get_server_state()
 
         from tdxdata_cmd import formula as _formula
@@ -142,6 +144,7 @@ def formula_multi(
     return_count: int = -1,
     save_db: bool = False,
     save_user_sector: bool = False,
+    is_with_name: bool = False,
     verbose: bool = False,
 ) -> str:
     """批量多股票公式计算，支持选股结果存为用户板块。
@@ -157,16 +160,29 @@ def formula_multi(
         return_count: 返回结果数量，-1 表示全部。
         save_db: 是否存入 PostgreSQL stock_metrics 表。
         save_user_sector: 是否将选股结果存为通达信用户板块（仅 xg 模式有效）。
+        is_with_name: 是否输出时附带股票名称（--with-name）。
         verbose: 是否输出详细信息。
     """
     try:
         require_tq()
+        log_tool_call()
         cfg, db_url, _ = get_server_state()
 
         from tdxdata_cmd import formula_multi as _formula_multi
 
-        if stocks is None:
+        if not stocks:
+            # stocks 为空时，从 TQ 拉取上证+深证+创业板（排除ST），约4400只
+            from tdx_quant.tqcenter import tq
+            from difoss_stock_util.stock_util import is_st_stock
             stocks = []
+            for m in ['7', '8', '51']:
+                info = tq.get_stock_list(market=m, list_type=1)
+                if info:
+                    stocks.extend([
+                        s['Code'] for s in info
+                        if isinstance(s, dict) and s.get('Code')
+                        and not is_st_stock(s.get('Name', ''))
+                    ])
 
         string_io = StringIO()
         console = Console(file=string_io, force_terminal=False)
@@ -192,7 +208,7 @@ def formula_multi(
             field_regex_exclusions=[r'^OUTPUT\d+'],
             field_inclusions=[],
             field_regex_inclusions=[],
-            is_with_name=False,
+            is_with_name=is_with_name,
             output_style='stock',
             sum_columns=[],
             is_save_user_sector=save_user_sector,

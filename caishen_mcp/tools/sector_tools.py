@@ -2,7 +2,7 @@
 """Sector tools: 板块查询 — 策略 B（直接调 tdx_quant API）"""
 
 from caishen_mcp.server import mcp, require_tq
-from caishen_mcp.ctx_helper import safe_result
+from caishen_mcp.ctx_helper import log_tool_call, safe_result
 
 
 @mcp.tool()
@@ -10,6 +10,7 @@ def get_sector_list() -> str:
     """列出通达信所有板块（行业板块、概念板块等）。"""
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
 
         sectors = tq.get_sector_list(list_type=1)
@@ -37,6 +38,7 @@ def get_stocks_in_sector(block_code: str, block_type: int = 0) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
 
         stocks = tq.get_stock_list_in_sector(block_code=block_code,
@@ -59,6 +61,7 @@ def get_user_sector_list() -> str:
     """列出所有用户自定义板块。"""
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
 
         sectors = tq.get_user_sector()
@@ -85,6 +88,7 @@ def get_user_sector_stocks(block_code: str) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
 
         stocks = tq.get_stock_list_in_sector(block_code=block_code,

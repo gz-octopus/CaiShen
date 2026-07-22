@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """MCP Server 公共工具：TQ 初始化、click.Context 构造、统一输出"""
 
+import inspect
 import json
+import sys
+import threading
 from collections import defaultdict
 from io import StringIO
 
@@ -12,13 +15,61 @@ from rich.console import Console
 from difoss_stock_util.util import read_yaml_config
 from difoss_stock_util.db_util import generate_engine_url_str
 from tdx_quant.tqcenter import tq
-from cache_cmd import cache_stock_name, cache_st_stock_name, cache_block_name
+from cache_cmd import cache_stock_name, cache_st_stock_name, cache_block_name, STOCKS
+
+# 线程本地存储：log_tool_call → safe_result 传递调用信息
+_tl = threading.local()
+
+
+def log_tool_call() -> None:
+    """记录当前 tool 名称和参数，存入线程本地 + 打印 stderr。
+
+    自动通过调用栈检测函数名和参数，无需手动传参。
+    每个 @mcp.tool() 函数在 try 块第一行调用即可。
+
+    调用信息会：
+    1. 打印到 stderr（服务端日志，用于调试）
+    2. 存入 _tl.tool_call，供 safe_result() 自动注入到响应的 _tool 字段
+    """
+    frame = inspect.currentframe()
+    if frame is None:
+        return
+    caller = frame.f_back
+    if caller is None:
+        return
+
+    func_name = caller.f_code.co_name
+    arg_info = inspect.getargvalues(caller)
+    args_dict = {
+        k: arg_info.locals[k]
+        for k in arg_info.args
+        if k not in ('self', 'cls')
+    }
+
+    parts = []
+    for k, v in args_dict.items():
+        v_str = repr(v)
+        if len(v_str) > 500:
+            v_str = v_str[:500] + "..."
+        parts.append(f"{k}={v_str}")
+
+    call_str = f"{func_name}({', '.join(parts)})"
+    _tl.tool_call = call_str
+    print(f"[caishen-mcp] {call_str}", file=sys.stderr, flush=True)
 
 
 def safe_result(status: str, **kwargs) -> str:
-    """构造统一 JSON 返回字符串。status: 'ok' | 'error' | 'partial'"""
+    """构造统一 JSON 返回字符串。status: 'ok' | 'error' | 'partial'
+
+    自动注入 log_tool_call() 记录的调用信息到 _tool 字段。
+    """
     result = {"status": status}
     result.update(kwargs)
+    # 注入调用信息：让每次 tool 返回结果的第一眼就看到命令和参数
+    call_info = getattr(_tl, 'tool_call', None)
+    if call_info:
+        result['_tool'] = call_info
+        _tl.tool_call = None
     return json.dumps(result, ensure_ascii=False, default=str)
 
 
@@ -51,6 +102,26 @@ def _cache_all_blocks_name():
     return 0
 
 
+def _cache_stocks_for_screening():
+    """缓存上证A股+深证A股+创业板代码到 STOCKS（排除ST），供 formula_multi 全市场选股使用"""
+    from difoss_stock_util.stock_util import is_st_stock
+
+    markets = ['7', '8', '51']  # 上证主板, 深证主板, 创业板
+    total = 0
+    for m in markets:
+        stocks_info = tq.get_stock_list(market=m, list_type=1)
+        if not stocks_info:
+            continue
+        codes = [
+            s['Code'] for s in stocks_info
+            if isinstance(s, dict) and s.get('Code')
+            and not is_st_stock(s.get('Name', ''))
+        ]
+        STOCKS.update(codes)
+        total += len(codes)
+    return total
+
+
 def init_tq_and_cache(config_path: str = 'config.yaml') -> tuple[dict, str, Console]:
     """初始化 TQ 连接并缓存股票名/板块名。
 
@@ -73,7 +144,10 @@ def init_tq_and_cache(config_path: str = 'config.yaml') -> tuple[dict, str, Cons
     tq.initialize(__file__)
     stock_count = _cache_stock_name_of_market()
     block_count = _cache_all_blocks_name()
+    stocks_cached = _cache_stocks_for_screening()
     console.file = StringIO()  # 重置 buffer
+
+    print(f"[caishen-mcp] 已缓存 {stocks_cached} 只筛选用股票代码", file=sys.stderr)
 
     return cfg, db_url, console
 

@@ -20,6 +20,8 @@ cffi==2.0.0
 charset-normalizer==3.4.2
 chinese_calendar==1.11.0
 click==8.3.0
+click-repl==0.3.0
+click-shell==2.1
 colorama==0.4.6
 colorcet==3.1.0
 comm==0.2.3
@@ -90,6 +92,7 @@ pycparser==2.23
 pydantic==2.12.4
 pydantic_core==2.41.5
 pyenv-win==3.1.1
+pypinyin==0.55.0
 Pygments==2.19.2
 pyinstaller==6.14.1
 pyinstaller-hooks-contrib==2025.5

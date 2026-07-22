@@ -662,7 +662,8 @@ def _df_row_to_record(date_idx, row: pd.Series, exchange_id: str, instrument_id:
 
 
 def _save_kline_to_db_table(dfs: dict, table_name: str, db_type: str, cfg: dict,
-                             is_replace: bool, console: Console) -> int:
+                             is_replace: bool, console: Console,
+                             verbose: bool = True) -> int:
     """通用 K 线数据入库（支持管道和内部调用）
 
     Args:
@@ -672,6 +673,7 @@ def _save_kline_to_db_table(dfs: dict, table_name: str, db_type: str, cfg: dict,
         cfg: config.yaml 配置字典
         is_replace: 是否替换已存在的记录
         console: Rich Console 实例
+        verbose: 是否打印单只股票入库结果（批量同步时设为 False 避免刷屏）
 
     Returns:
         成功插入的总记录数
@@ -684,6 +686,9 @@ def _save_kline_to_db_table(dfs: dict, table_name: str, db_type: str, cfg: dict,
     db_url = _assemble_db_url(db_type, cfg)
     model_cls.init_db(db_url)
     total_inserted = 0
+    # 诊断用：记录首次插入失败的错误类型（批量同步时不刷屏，但汇总时有用）
+    _first_batch_err: str | None = None
+    _first_row_err: str | None = None
 
     for code, df in dfs.items():
         if df.empty:
@@ -710,6 +715,8 @@ def _save_kline_to_db_table(dfs: dict, table_name: str, db_type: str, cfg: dict,
                     total_inserted += len(batch)
                 except Exception as e:
                     session.rollback()
+                    if _first_batch_err is None:
+                        _first_batch_err = f"{type(e).__name__}: {e}"
                     if is_replace:
                         # 逐条 upsert
                         for record in batch:
@@ -726,19 +733,30 @@ def _save_kline_to_db_table(dfs: dict, table_name: str, db_type: str, cfg: dict,
                                 session.add(model_cls(**record))
                                 session.commit()
                                 total_inserted += 1
-                            except Exception:
+                            except Exception as ex:
                                 session.rollback()
+                                if _first_row_err is None:
+                                    _first_row_err = f"{type(ex).__name__}: {ex}"
 
-    console.print(f"✅ 成功插入 {total_inserted} 条记录到 [yellow]{table_name}[/yellow]")
+    if verbose:
+        console.print(f"✅ 成功插入 {total_inserted} 条记录到 [yellow]{table_name}[/yellow]")
+    elif total_inserted == 0 and _first_batch_err is not None:
+        # verbose=False 且全部失败时，输出诊断信息帮助排查（如分区缺失、类型不匹配等）
+        console.print(f"[yellow]⚠ 入库 0 条[/yellow] — 首批错误: {_first_batch_err}")
     return total_inserted
 
 
 def _save_to_db(df: pd.DataFrame, code: str, table_name: str,
-                console: Console, cfg: dict, db_type: str = None, is_replace: bool = False):
-    """保存单只股票的 K 线数据到数据库（供 get_market_data --save-db 内部调用）"""
+                console: Console, cfg: dict, db_type: str = None, is_replace: bool = False,
+                verbose: bool = True) -> int:
+    """保存单只股票的 K 线数据到数据库（供 get_market_data --save-db 内部调用）
+
+    Returns:
+        成功插入的记录数
+    """
     if db_type is None:
         db_type = DB_TYPE
-    _save_kline_to_db_table({code: df}, table_name, db_type, cfg, is_replace, console)
+    return _save_kline_to_db_table({code: df}, table_name, db_type, cfg, is_replace, console, verbose=verbose)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2796,19 +2814,36 @@ def user_sector(
                 _CSL.print(f"已清空自定义板块【代码：{code} 名称：{name}】中的个股")
 
         elif action == 'diff':
+            # ── 解析板块1 ──
+            code1 = None
             if abbrev1:
                 code1 = abbrev1
+                if code1 not in sectors_code2name:
+                    E(f"未找到板块简称 [yellow]{abbrev1}[/yellow]，请先 [yellow]us -a get[/yellow] 确认正确的简称")
+                    return
+            elif name1:
+                code1 = sectors_name2code.get(name1)
+                if not code1:
+                    E(f"未找到板块名称 [yellow]\"{name1}\"[/yellow]，请先用 [yellow]us -a get -n \"{name1[:8]}...\"[/yellow] 模糊查找确切的板块名称")
+                    return
+            else:
+                E("板块对比需提供 [yellow]-abb1[/yellow]（板块简称）或 [yellow]-n1[/yellow]（板块名称），当前均未提供")
+                return
+
+            # ── 解析板块2 ──
+            code2 = None
             if abbrev2:
                 code2 = abbrev2
-
-            if name1:
-                code1 = sectors_name2code.get(name1)
-
-            if name2:
+                if code2 not in sectors_code2name:
+                    E(f"未找到板块简称 [yellow]{abbrev2}[/yellow]，请先 [yellow]us -a get[/yellow] 确认正确的简称")
+                    return
+            elif name2:
                 code2 = sectors_name2code.get(name2)
-
-            if not (code1 and code2):
-                E("进行板块对比时，参数 -abb1 （或 -n1） 和 -abb2（或-n2） 都必须提供")
+                if not code2:
+                    E(f"未找到板块名称 [yellow]\"{name2}\"[/yellow]，请先用 [yellow]us -a get -n \"{name2[:8]}...\"[/yellow] 模糊查找确切的板块名称")
+                    return
+            else:
+                E("板块对比需提供 [yellow]-abb2[/yellow]（板块简称）或 [yellow]-n2[/yellow]（板块名称），当前均未提供")
                 return
 
             stocks1 = set(tq.get_stock_list_in_sector(block_code=code1, block_type=1, list_type=0) or [])
@@ -3884,16 +3919,21 @@ def _fetch_daily_df(sym: str, start_date: str, end_date: str) -> Optional[pd.Dat
     复用 get_market_data 命令 --save-db 分支的同一路径：
     tq.get_market_data → transform_field_to_stock_fast，产出结构与 _save_to_db 入参一致。
     """
-    dict_df = tq.get_market_data(
-        field_list=['Open', 'High', 'Low', 'Close', 'Volume', 'Amount'],
-        stock_list=[sym],
-        start_time=f"{start_date}000000",
-        end_time=f"{end_date}235959",
-        count=-1,
-        dividend_type='front',
-        period='1d',
-        fill_data=False,  # 必须 False：True 会给停牌日填充假数据（见文件头 v0.1.2 备注）
-    )
+    # 退市股/未上市区间无数据时，tdx_quant 内部会对每个缺失字段 print 一行警告
+    # ("警告：请求字段'Open'在结果中不存在，已忽略该字段")，批量同步时刷屏无意义
+    import io as _io
+    from contextlib import redirect_stdout as _redirect_stdout
+    with _redirect_stdout(_io.StringIO()):
+        dict_df = tq.get_market_data(
+            field_list=['Open', 'High', 'Low', 'Close', 'Volume', 'Amount'],
+            stock_list=[sym],
+            start_time=f"{start_date}000000",
+            end_time=f"{end_date}235959",
+            count=-1,
+            dividend_type='front',
+            period='1d',
+            fill_data=False,  # 必须 False：True 会给停牌日填充假数据（见文件头 v0.1.2 备注）
+        )
     if not dict_df:
         return None
     stock_2_df = transform_field_to_stock_fast(dict_df)
@@ -3931,58 +3971,71 @@ def _ensure_yearly_partitions(db_url: str, start_year: int, end_year: int, conso
 @command_with_abbrev(abbrev='sync', context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--start', '-s', 'start_date', default='20150101', show_default=True, help='起始日期 YYYYMMDD')
 @click.option('--end', '-e', 'end_date', default=None, help='结束日期 YYYYMMDD，默认今天')
-@click.option('--resume/--no-resume', default=True, show_default=True, help='断点续传（读 sync_progress.json）')
 @click.option('--include-delisted/--no-include-delisted', default=True, show_default=True,
               help='包含退市股（防幸存者偏差）')
 @click.pass_context
 def sync_history(_ctx: click.Context, start_date: str, end_date: str | None,
-                 resume: bool, include_delisted: bool):
-    """全市场日线批量同步 → history_data_1d（前复权，断点续传，缩写: sync）
+                 include_delisted: bool):
+    """全市场日线批量同步 → history_data_1d（前复权，缩写: sync）
 
     用法示例：
-        sync-history -s 20150101          # 全量同步（断点续传）
-        sync -s 20250101 --no-resume      # 忽略进度重跑
+        sync -s 20150101                # 全量同步
+        sync -s 20250101 --no-include-delisted  # 仅在市A股
     """
-    from pathlib import Path
-
     _CSL = _ctx.obj['console']  # type: Console
     _CFG = _ctx.obj['cfg']  # type: dict
 
     try:
         end_date = end_date or datetime.now().strftime('%Y%m%d')
-        progress_file = Path('sync_progress.json')
-        done: set = set(json.loads(progress_file.read_text(encoding='utf-8'))) \
-            if (resume and progress_file.exists()) else set()
 
-        # PG 分区表：先确保目标年份分区存在，否则插入静默失败（成功 0 条）
+        # PG 分区表：先确保目标年份分区存在
         if DB_TYPE in ('pg', 'postgresql'):
             _ensure_yearly_partitions(_assemble_db_url(DB_TYPE, _CFG),
                                       int(start_date[:4]), int(end_date[:4]) + 1, _CSL)
 
         stock_list = _all_a_stock_codes(_CSL, include_delisted=include_delisted)
-        todo = [s for s in stock_list if s not in done]
-        _CSL.print(f"待同步 [green]{len(todo)}[/green]/{len(stock_list)} 只，区间 {start_date}~{end_date}")
+        total = len(stock_list)
+        _CSL.print(f"待同步 [green]{total}[/green] 只，区间 {start_date}~{end_date}")
 
-        fail: list[str] = []
-        try:
-            for i, sym in enumerate(todo, 1):
-                try:
-                    df = _fetch_daily_df(sym, start_date, end_date)
-                    if df is not None and len(df):
-                        _save_to_db(df, sym, 'history_data_1d', _CSL, _CFG, db_type=DB_TYPE)
-                    done.add(sym)
-                except Exception as ex:
-                    fail.append(sym)
-                    W(f"{sym} 同步失败: {ex}", _level='sync')
-                if i % 50 == 0:
-                    progress_file.write_text(json.dumps(sorted(done)), encoding='utf-8')
-                    _CSL.print(f"  进度 {i}/{len(todo)}，失败 {len(fail)}")
-                    sleep(0.5)  # 限速，避免打爆本地 TDX 服务
-        finally:
-            # Ctrl+C 中断也持久化进度，保证断点续传
-            progress_file.write_text(json.dumps(sorted(done)), encoding='utf-8')
+        # --- 统计 ---
+        n_inserted = 0      # 实际写入的新记录条数
+        n_no_data = 0       # TDX 端无数据（退市股 / 停牌股等）
+        n_skipped = 0       # 数据已存在于 DB（重复键跳过）
+        n_fail: list[str] = []
 
-        _CSL.print(f"完成：成功 [green]{len(done)}[/green]，失败 [red]{len(fail)}[/red]"
-                   + (f": {fail[:20]}" if fail else ""))
+        for i, sym in enumerate(stock_list, 1):
+            try:
+                df = _fetch_daily_df(sym, start_date, end_date)
+                if df is not None and len(df):
+                    n = _save_to_db(df, sym, 'history_data_1d', _CSL, _CFG,
+                                    db_type=DB_TYPE, verbose=False)
+                    if n > 0:
+                        n_inserted += n
+                    else:
+                        n_skipped += 1
+                else:
+                    n_no_data += 1
+            except Exception as ex:
+                n_fail.append(sym)
+                W(f"{sym} 同步失败: {ex}", _level='sync')
+
+            # 每 100 只或最后一只时打印进度
+            if i % 100 == 0 or i == total:
+                _CSL.print(f"  [{i}/{total}]"
+                           f"  新写入 [green]{n_inserted}[/green]"
+                           f"  已存在 [dim]{n_skipped}[/dim]"
+                           f"  无数据 [yellow]{n_no_data}[/yellow]"
+                           f"  失败 [red]{len(n_fail)}[/red]")
+                sleep(0.5)  # 限速，避免打爆本地 TDX 服务
+
+        # --- 最终汇总 ---
+        _CSL.print(f"\n[bold]同步完成[/bold]："
+                   f"区间 {start_date}~{end_date}，"
+                   f"共 {total} 只 → "
+                   f"新写入 [green]{n_inserted} 条[/green] | "
+                   f"已存在 [dim]{n_skipped} 只[/dim] | "
+                   f"无数据 [yellow]{n_no_data} 只[/yellow] | "
+                   f"失败 [red]{len(n_fail)} 只[/red]"
+                   + (f" {n_fail[:10]}" if n_fail else ""))
     except Exception:
         _CSL.print_exception(extra_lines=5, show_locals=True)

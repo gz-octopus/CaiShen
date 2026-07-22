@@ -7,7 +7,7 @@ from datetime import datetime
 import pandas as pd
 
 from caishen_mcp.server import mcp, get_server_state, require_tq
-from caishen_mcp.ctx_helper import safe_result, df_to_json_safe
+from caishen_mcp.ctx_helper import log_tool_call, safe_result, df_to_json_safe
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -62,6 +62,7 @@ def get_stock_metrics(
     """
     try:
         require_tq()
+        log_tool_call()
         _, db_url, _ = get_server_state()
 
         from difoss_stock_util.metric_data.stock_metrics import StockMetrics
@@ -120,6 +121,7 @@ def get_market_data(
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
 
         flat_stocks = _normalize_stocks(stocks)
@@ -174,6 +176,7 @@ def get_stock_list(market: str = "") -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
 
         res = tq.get_stock_list(market=market, list_type=1)
@@ -199,6 +202,7 @@ def get_match_stkinfo(keyword: str) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
 
         res = tq.get_match_stkinfo(key_word=keyword)
@@ -230,6 +234,7 @@ def get_stock_info(stock: str) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         res = tq.get_stock_info(stock_code=stock)
         return safe_result("ok", data=res if isinstance(res, dict) else {},
@@ -249,6 +254,7 @@ def get_more_info(stock: str) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         res = tq.get_more_info(stock_code=stock)
         return safe_result("ok", data=res if isinstance(res, dict) else {},
@@ -268,6 +274,7 @@ def get_market_snapshot(stock: str) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         res = tq.get_market_snapshot(stock_code=stock)
         return safe_result("ok", data=res if isinstance(res, dict) else {},
@@ -295,6 +302,7 @@ def get_financial_data(
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         flat_stocks = _normalize_stocks(stocks)
         res = tq.get_financial_data(
@@ -320,6 +328,7 @@ def get_divide_factors(stock: str, start_time: str = "", end_time: str = "") -> 
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         df = tq.get_divid_factors(stock_code=stock, start_time=start_time, end_time=end_time)
         records = df_to_json_safe(df)
@@ -341,6 +350,7 @@ def get_ipo_info(ipo_type: int = 0, ipo_date: int = 0) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         res = tq.get_ipo_info(ipo_type=ipo_type, ipo_date=ipo_date)
         return safe_result("ok", data=res if isinstance(res, list) else [],
@@ -361,6 +371,7 @@ def get_gb_info(stock: str, count: int = 1) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         res = tq.get_gb_info(stock_code=stock, count=count)
         return safe_result("ok", data=res if isinstance(res, dict) else {},
@@ -380,6 +391,7 @@ def get_cb_info(stock: str) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         res = tq.get_cb_info(stock_code=stock)
         return safe_result("ok", data=res if isinstance(res, dict) else {},
@@ -400,6 +412,7 @@ def get_trading_dates(market: str = "SH", count: int = 20) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         dates = tq.get_trading_dates(market=market, start_time="", end_time="", count=count)
         return safe_result("ok", data=dates if isinstance(dates, list) else [],
@@ -432,6 +445,7 @@ def get_gpjy_value(
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         flat_stocks = _normalize_stocks(stocks)
         if date:
@@ -464,6 +478,7 @@ def get_bkjy_value(
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         flat = _normalize_stocks(stocks or [])
         if date:
@@ -490,6 +505,7 @@ def get_scjy_value(start_time: str = "", end_time: str = "", date: str | None = 
     """
     try:
         require_tq()
+        log_tool_call()
         from tdx_quant.tqcenter import tq
         if date:
             res = tq.get_scjy_value_by_date(field_list=[], mmdd=int(date))
@@ -512,6 +528,7 @@ def stock_block_stat(stocks: list[str] | None = None) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         cfg, db_url, _ = get_server_state()
 
         from tdxdata_cmd import stock_block_stat as _sbs
@@ -541,6 +558,7 @@ def stock_stat(stocks: list[str] | None = None) -> str:
     """
     try:
         require_tq()
+        log_tool_call()
         cfg, db_url, _ = get_server_state()
 
         from tdxdata_cmd import stock_stat as _ss
