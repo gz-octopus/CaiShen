@@ -32,7 +32,7 @@ from difoss_stock_util.click_util import *
 from difoss_stock_util.color_log_util import *
 from difoss_stock_util.security_util import *
 from difoss_stock_util.util import print_locals, trace_function
-from difoss_stock_util.stock_util import calc_belong_trading_day, calc_count_of_trading_days, TradingInfo, is_st_stock
+from difoss_stock_util.stock_util import calc_belong_trading_day, calc_previous_trading_day, calc_count_of_trading_days, TradingInfo, is_st_stock
 from difoss_stock_util.db_util_lazy_loading import *
 from difoss_stock_util.metric_data.stock_metrics import StockMetrics
 from difoss_stock_util.metric_data.market_data import MarketData
@@ -783,7 +783,7 @@ def _query_table_stocks(db_url: str, table_name: str, console: Console,
                     rows = conn.execute(sql, {'trade_date': trade_date}).fetchall()
                 else:
                     rows = conn.execute(text(
-                        f"""SELECT DISTINCT symbol FROM {table_name} 
+                        f"""SELECT DISTINCT symbol FROM {table_name}
                         ORDER BY symbol
                     """)).fetchall()
                 stocks = {str(r[0]) for r in rows}
@@ -855,11 +855,11 @@ def db(_ctx: click.Context, table_name: str, is_replace: bool,
         f -t zb -n MACD -s 603337.SH | db               # → stock_metrics
         gmd -c 100 -s 600000.SH | db -t stock_metrics   # 显式覆盖
         db -t stock_metrics -ls                          # 列出 stock_metrics 中所有股票
-        db -t history_data_1d -ls | fcf -zmin 1000       # 管道：有K线数据的股 → 资金筛选
+        db -t history_data_1d -ls | fcf -zm-min 1000      # 管道：有K线数据的股 → 资金筛选
         db --set-db-type sqlite                          # 修改全局默认数据库类型
     """
     print_locals()
-    
+
     global DB_TYPE
     _CSL = _ctx.obj['console']  # type: Console
     _CFG = _ctx.obj['cfg']  # type: dict
@@ -1478,27 +1478,36 @@ def get_sector_list(_ctx: click.Context,
             mask = df['Name'].str.contains(pattern, na=False)
             df_filtered = df[mask].copy()
 
-            print_dataframe(df_filtered, title=f'含有 {contains} 的板块（{len(df_filtered)} / {len(df)}）', printer=_CSL.print)
-
             if cache_stocks or is_verbose or _is_pipe_producer:
                 stocks_in_filtered_sectors = set()
                 blocks_in_filtered = set(df_filtered['Code'].tolist())
 
-                # 直接遍历过滤后的 DataFrame
+                # 遍历板块获取成份股，同时填充 stocks.num 和 stocks 列
+                stocks_num_col = []
+                stocks_list_col = []
                 for _, row in df_filtered.iterrows():
                     sector_code = row['Code']
                     res = tq.get_stock_list_in_sector(block_code=sector_code, block_type=0, list_type=1)
-
-                    if is_verbose:
-                        _CSL.print(f"板块 [yellow]{sector_code}[/yellow] ({row['Name']}) 中含有 {len(res)} 只个股：", end='')
-                        _CSL.print([f"{r.get('Code')}|{r.get('Name')}" for r in res if isinstance(r, dict)])
+                    cnt = len(res) if res else 0
+                    stocks_num_col.append(cnt)
+                    stocks_list_col.append(
+                        [f"{r.get('Code')}|{r.get('Name')}" for r in res if isinstance(r, dict)]
+                        if res else []
+                    )
 
                     if (cache_stocks or _is_pipe_producer) and res:
                         stocks_in_filtered_sectors.update([_get(x) for x in res if x])
 
-                if cache_stocks or cache_blocks or _is_pipe_producer:
-                    return {'stocks': stocks_in_filtered_sectors,
-                            'blocks': blocks_in_filtered}
+                df_filtered['stocks.num'] = stocks_num_col
+                df_filtered['stocks'] = stocks_list_col
+
+            print_dataframe(df_filtered,
+                            title=f'含有 {contains} 的板块（{len(df_filtered)} / {len(df)}）',
+                            printer=_CSL.print)
+
+            if cache_stocks or cache_blocks or _is_pipe_producer:
+                return {'stocks': stocks_in_filtered_sectors,
+                        'blocks': blocks_in_filtered}
 
         else:
             if _is_pipe_producer:
@@ -1914,6 +1923,8 @@ def stock_block_stat(_ctx: click.Context,
               help='结束统计日期（默认：今天）')
 @click.option('--daily', '-dl', 'daily', is_flag=True,
               help='逐日输出模式：从买入日起每一天输出一个持仓盈亏 DataFrame')
+@click.option('--intraday', '-id', 'intraday', is_flag=True,
+              help='日内盈亏曲线（仅 -dl 时生效，需安装 plotext）')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的逐日 K 线明细）')
 @click.option('--top', '-top', 'top_n', type=int, default=0, show_default=True,
               help='仅显示涨/跌幅前 N 名（0 表示全部）')
@@ -1925,6 +1936,7 @@ def stock_stat(_ctx: click.Context,
     date: datetime | None,
     end_time: datetime | None,
     daily: bool,
+    intraday: bool,
     is_verbose: bool,
     top_n: int,
     max_to_show: int,
@@ -1934,9 +1946,9 @@ def stock_stat(_ctx: click.Context,
     """统计个股从某日收盘买入后的持仓盈亏表现
 
     以 --date 当日收盘价为买入成本，计算持有期内每天：
-    - 收盘盈亏（涨幅%）：(当日收盘 - 买入成本) / 买入成本 × 100
-    - 最高盈亏（涨幅%）：(当日最高 - 买入成本) / 买入成本 × 100
-    - 最低盈亏（跌幅%）：(当日最低 - 买入成本) / 买入成本 × 100
+    - 盈亏.收盘（涨幅%）：(当日收盘 - 买入成本) / 买入成本 × 100
+    - 盈亏.最高（涨幅%）：(当日最高 - 买入成本) / 买入成本 × 100
+    - 盈亏.最低（跌幅%）：(当日最低 - 买入成本) / 买入成本 × 100
 
     返回 {'stocks': 股票集合} 供管道下游使用。
 
@@ -1949,13 +1961,14 @@ def stock_stat(_ctx: click.Context,
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # 确定日期范围
+    now_dt = datetime.now()
+    now_trading_date = calc_belong_trading_day(now_dt, datetime_time(hour=9, minute=30))
     if date is None:
-        now_dt = datetime.now()
-        entry_date = calc_belong_trading_day(now_dt, datetime_time(hour=15))
+        entry_date = calc_previous_trading_day(now_trading_date, n=1)
     else:
         entry_date = date
     if end_time is None:
-        end_date = datetime.now()
+        end_date = now_trading_date
     else:
         end_date = end_time
 
@@ -2070,25 +2083,29 @@ def stock_stat(_ctx: click.Context,
                         '代码': sc.short_code,
                         '名称': get_stock_name(full_code, ''),
                         '收盘': day_data['close'],
-                        '收盘盈亏%': day_data['close_pnl'],
-                        '最高盈亏%': day_data['high_pnl'],
-                        '最低盈亏%': day_data['low_pnl'],
+                        '盈亏.收盘%': day_data['close_pnl'],
+                        '盈亏.最高%': day_data['high_pnl'],
+                        '盈亏.最低%': day_data['low_pnl'],
                     })
 
                 if not day_rows:
                     continue
 
-                df_day = pd.DataFrame(day_rows).sort_values('收盘盈亏%', ascending=False).reset_index(drop=True)
+                df_day = pd.DataFrame(day_rows).sort_values('盈亏.收盘%', ascending=False).reset_index(drop=True)
                 if top_n > 0:
                     half = top_n // 2 if top_n > 1 else 1
                     df_day = pd.concat([df_day.head(half), df_day.tail(top_n - half)]).drop_duplicates()
 
                 day_str = day.strftime('%Y%m%d') if hasattr(day, 'strftime') else str(day)[:10]
                 print_dataframe(df_day,
-                                title=f"📅 {day_str} 持仓盈亏（共 {len(day_rows)} 只，显示前 {min(max_to_show, len(df_day))} 条）",
+                                title=f"📅 {day_str} 持仓盈亏（共 {len(day_rows)} 只）",
                                 table_max_rows=max_to_show,
-                                avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
+                                avg_cols=['盈亏.收盘%', '盈亏.最高%', '盈亏.最低%'],
                                 show_footer=True, printer=_CSL.print)
+
+                # ── 日内盈亏曲线（需 plotext）──
+                if intraday and all_passed:
+                    _plot_intraday(_ctx, day, all_passed, stock_pnl, _CSL)
         else:
             # ── Step 3b: 最终汇总模式 ──
             stock_results = []
@@ -2109,10 +2126,10 @@ def stock_stat(_ctx: click.Context,
                     '买入日': first['date'].strftime('%Y%m%d') if hasattr(first['date'], 'strftime') else str(first['date']),
                     '买入价': round(info['entry_close'], 2),
                     '最新收盘': latest['close'],
-                    '收盘盈亏%': latest['close_pnl'],
-                    '最高盈亏%': max_high,
+                    '盈亏.收盘%': latest['close_pnl'],
+                    '盈亏.最高%': max_high,
                     '最高日': high_day['date'].strftime('%Y%m%d') if hasattr(high_day['date'], 'strftime') else str(high_day['date']),
-                    '最低盈亏%': min_low,
+                    '盈亏.最低%': min_low,
                     '最低日': low_day['date'].strftime('%Y%m%d') if hasattr(low_day['date'], 'strftime') else str(low_day['date']),
                     '持有天数': len(pnl_list),
                 })
@@ -2121,7 +2138,7 @@ def stock_stat(_ctx: click.Context,
                 _CSL.print("[yellow]无有效数据[/yellow]")
                 return
 
-            df_summary = pd.DataFrame(stock_results).sort_values('收盘盈亏%', ascending=False).reset_index(drop=True)
+            df_summary = pd.DataFrame(stock_results).sort_values('盈亏.收盘%', ascending=False).reset_index(drop=True)
 
             if top_n > 0:
                 half = top_n // 2 if top_n > 1 else 1
@@ -2131,12 +2148,11 @@ def stock_stat(_ctx: click.Context,
 
             _CSL.print(f"\n统计完成: [green]{len(stock_results)}[/green] / {len(stocks_list)} 只")
             print_dataframe(df_show,
-                            title=f"持仓盈亏（买入日 {entry_date_str}，截止 {end_date_str}，"
-                                  f"共 {len(df_summary)} 只"
+                            title=f"持仓盈亏（共 {len(df_summary)} 只）买入日 {entry_date_str}，截止 {end_date_str}，"
                                   + (f"，显示涨跌前 {top_n} 名" if top_n > 0 else ""),
                             table_max_rows=max_to_show,
                             sum_cols=['持有天数'],
-                            avg_cols=['收盘盈亏%', '最高盈亏%', '最低盈亏%'],
+                            avg_cols=['盈亏.收盘%', '盈亏.最高%', '盈亏.最低%'],
                             show_footer=True, printer=_CSL.print)
 
         # ── verbose: 逐 K 线明细 ──
@@ -2147,8 +2163,8 @@ def stock_stat(_ctx: click.Context,
                     continue
                 sc = SecurityCode(full_code)
                 df_detail = pd.DataFrame(pnl_list).set_index('date')
-                df_detail = df_detail.rename(columns={'close_pnl': '收盘盈利%', 'high_pnl': '最高盈利%', 'low_pnl': '最低盈利%'})
-                daily_cols = ['close', '收盘盈利%', '最高盈利%', '最低盈利%']
+                df_detail = df_detail.rename(columns={'close_pnl': '盈亏.收盘%', 'high_pnl': '盈亏.最高%', 'low_pnl': '盈亏.最低%'})
+                daily_cols = ['close', '盈亏.收盘%', '盈亏.最高%', '盈亏.最低%']
                 print_dataframe(df_detail[daily_cols],
                                 title=f"{sc.short_code} {get_stock_name(full_code, '')} 逐日明细（共 {len(pnl_list)} 天）",
                                 table_max_rows=max_to_show, show_footer=True, printer=_CSL.print)
@@ -2204,9 +2220,9 @@ def filter_capital_flow(_ctx: click.Context,
     返回 {'stocks': 符合条件的股票集合} 供管道下游使用。
 
     使用示例：
-        fcf -s 603358.SH -s 600000.SH -zmin 1000            # 主买净额 ≥ 1000万
-        fcf -zmin 500 -hmin 1000 -zmax 5000                 # 双条件范围筛选
-        gs -m 50 | fcf -zmin 1000 -v                        # 管道：全A股 → 资金流筛选
+        fcf -s 603358.SH -zm-min 1000                       # 主买净额 ≥ 1000万
+        fcf -zm-min 500 -zl-min 1000 -zm-max 5000           # 双条件范围筛选
+        gs -m 50 | fcf -zm-min 1000 -v                      # 管道：全A股 → 资金流筛选
     """
     _CSL = _ctx.obj['console']  # type: Console
     _CFG = _ctx.obj['cfg']  # type: dict
@@ -2338,33 +2354,44 @@ def filter_capital_flow(_ctx: click.Context,
               default=STOCKS, required=False, help='股票代码列表。管道模式下可从上游自动获取')
 @click.option('--date', '-d', 'date', type=DATETIME, default=None,
               help='日期（默认：最近一个交易日 9:30 为界）')
-@click.option('--filter-zt/--no-filter-zt', '-zt/-nzt', 'filter_zt', default=True, show_default=True,
-              help='过滤涨停股')
-@click.option('--filter-dt/--no-filter-dt', '-dt/-ndt', 'filter_dt', default=True, show_default=True,
-              help='过滤跌停股')
+@click.option('--keep-zt', '-zt', 'keep_zt', is_flag=True, default=False,
+              help='保留涨停股')
+@click.option('--keep-not-zt', '-nzt', 'keep_not_zt', is_flag=True, default=False,
+              help='保留非涨停股')
+@click.option('--keep-dt', '-dt', 'keep_dt', is_flag=True, default=False,
+              help='保留跌停股')
+@click.option('--keep-not-dt', '-ndt', 'keep_not_dt', is_flag=True, default=False,
+              help='保留非跌停股')
+@click.option('--without-st', '-nst', 'without_st', is_flag=True, help='排除ST')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式')
 @click.pass_context
 def filter_limit(_ctx: click.Context,
     stocks: list[str],
     date: datetime | None,
-    filter_zt: bool,
-    filter_dt: bool,
+    keep_zt: bool,
+    keep_not_zt: bool,
+    keep_dt: bool,
+    keep_not_dt: bool,
+    without_st: bool,
     is_verbose: bool,
     cache_stocks: bool,
     stock_group_index: int,
 ):
-    """过滤涨跌停股票（剔除当日涨停/跌停股）
+    """按涨跌停条件筛选个股
 
     使用通达信取整规则精确计算涨跌停价（calc_limit_price），
     自动识别 主板10% / 科创板20% / 创业板20% / 北交所30%。
-    盘中未收盘时使用当前价格。
 
-    返回 {'stocks': 过滤后剩余的股票集合} 供管道下游使用。
+    四个开关独立并存，保留满足任一条件的个股：
+    -zt 保留涨停股，-nzt 保留非涨停股，-dt 保留跌停股，-ndt 保留非跌停股
+
+    返回 {'stocks': 符合条件的股票集合} 供管道下游使用。
 
     使用示例：
-        fl -s 603358.SH                             # 过滤涨停+跌停
-        fl --no-filter-dt                           # 仅过滤涨停
-        gs -m 50 | fl -v                            # 全A股过滤涨跌停
+        fl -s 603358.SH -nzt -ndt                      # 剔除涨跌停
+        fl -zt                                         # 仅保留涨停
+        fl -zt -ndt                                    # 涨停 + 非跌停 = 涨停未封死
+        gs -m 50 | fl -nzt -ndt -v                     # 全A股剔除涨跌停
     """
     _CSL = _ctx.obj['console']  # type: Console
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
@@ -2385,8 +2412,14 @@ def filter_limit(_ctx: click.Context,
             _CSL.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
             return
 
-        _CSL.print(f"\n[bold]🚫 涨跌停过滤[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
-                      f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
+        labels = []
+        if keep_zt: labels.append('涨停')
+        if keep_not_zt: labels.append('非涨停')
+        if keep_dt: labels.append('跌停')
+        if keep_not_dt: labels.append('非跌停')
+        _CSL.print(f"\n[bold]🚫 涨跌停筛选[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
+                   f"条件: [yellow]{' + '.join(labels)}[/yellow]，"
+                   f"候选: [yellow]{len(stocks_list)}[/yellow] 只")
 
         # 取近2日 Close 计算涨跌停价
         dict_df = tq.get_market_data(
@@ -2401,12 +2434,18 @@ def filter_limit(_ctx: click.Context,
         stock_2_df = transform_field_to_stock_fast(dict_df)
 
         from difoss_stock_util.stock_util import calc_limit_price
-        zt_stocks, dt_stocks = set(), set()
+        zt_stocks, dt_stocks, normal_stocks = set(), set(), set()
+        st_removed = set()
         kept = set()
 
         for full_code, df in stock_2_df.items():
             if df is None or df.empty:
                 continue
+
+            if without_st and is_st(full_code):
+                st_removed.add(full_code)
+                continue
+
             closes = df['Close'].values
             if len(closes) < 2:
                 continue
@@ -2416,18 +2455,31 @@ def filter_limit(_ctx: click.Context,
                 continue
             sc = SecurityCode(full_code)
 
-            if filter_zt and today_close >= calc_limit_price(prev_close, sc.short_code, is_limit_up=True):
+            is_zt = today_close >= calc_limit_price(prev_close, sc.short_code, is_limit_up=True)
+            is_dt = today_close <= calc_limit_price(prev_close, sc.short_code, is_limit_up=False)
+
+            if is_zt:
                 zt_stocks.add(full_code)
-                continue
-            if filter_dt and today_close <= calc_limit_price(prev_close, sc.short_code, is_limit_up=False):
+            if is_dt:
                 dt_stocks.add(full_code)
-                continue
-            kept.add(full_code)
+            if not is_zt and not is_dt:
+                normal_stocks.add(full_code)
 
-        _CSL.print(f"涨停剔除: [red]{len(zt_stocks)}[/red] 只，"
-                      f"跌停剔除: [green]{len(dt_stocks)}[/green] 只，"
-                      f"保留: [yellow]{len(kept)}[/yellow] 只")
+            # 四个开关独立，满足任一条件即保留
+            if (keep_zt and is_zt) or \
+               (keep_not_zt and not is_zt) or \
+               (keep_dt and is_dt) or \
+               (keep_not_dt and not is_dt):
+                kept.add(full_code)
 
+        _CSL.print(f"涨停: [red]{len(zt_stocks)}[/red] 只（保留 {len(zt_stocks & kept)}），"
+                   f"跌停: [green]{len(dt_stocks)}[/green] 只（保留 {len(dt_stocks & kept)}），"
+                   f"正常: [dim]{len(normal_stocks)}[/dim] 只，"
+                   + (f"ST剔除: [magenta]{len(st_removed)}[/magenta] 只，" if st_removed else "") +
+                   f"最终保留: [yellow]{len(kept)}[/yellow] 只")
+
+        if is_verbose and st_removed:
+            _CSL.print(f"ST剔除股: {list(st_removed)[:20]}")
         if is_verbose and zt_stocks:
             _CSL.print(f"涨停股: {list(zt_stocks)[:20]}")
         if is_verbose and dt_stocks:
@@ -2438,6 +2490,88 @@ def filter_limit(_ctx: click.Context,
 
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+def _plot_intraday(_ctx, day, stock_codes: set, stock_pnl: dict, _CSL: Console):
+    """绘制日内盈亏曲线（5分钟K线），需 plotext"""
+    try:
+        import plotext as plt
+    except ImportError:
+        _CSL.print("[yellow]⚠ 需要安装 plotext: pip install plotext[/yellow]")
+        return
+
+    day_str = day.strftime('%Y%m%d') if hasattr(day, 'strftime') else str(day)[:10]
+
+    stocks_list = list(stock_codes)
+    if not stocks_list:
+        return
+
+    # 取1分钟K线（仅支持 count 模式，start_time/end_time 对分钟线无效）
+    dict_df = tq.get_market_data(
+        field_list=['Close'],
+        stock_list=stocks_list,
+        period='1m', count=240,
+        dividend_type='front', fill_data=False,
+    )
+    if not dict_df:
+        _CSL.print("[yellow]⚠ 无日内分钟线数据（可能需先 refresh_kline -p 1m）[/yellow]")
+        return
+    stock_2_df = transform_field_to_stock_fast(dict_df)
+
+    # 仅保留目标日期的分钟线
+    target_date = pd.Timestamp(day.date() if hasattr(day, 'date') else day)
+    curves = {}
+    for full_code, df in stock_2_df.items():
+        if df is None or df.empty:
+            continue
+        df_day = df[df.index.normalize() == target_date]
+        if df_day.empty:
+            continue
+        info = stock_pnl.get(full_code, {})
+        entry_close = info.get('entry_close', 0)
+        if entry_close == 0:
+            continue
+        closes = df_day['Close'].values
+        curves[full_code] = [(c - entry_close) / entry_close * 100 for c in closes]
+
+    if not curves:
+        _CSL.print("[yellow]无日内数据[/yellow]")
+        return
+
+    # 计算平均曲线
+    max_len = max(len(v) for v in curves.values())
+    avg_curve = [0.0] * max_len
+    for i in range(max_len):
+        vals = [c[i] for c in curves.values() if i < len(c)]
+        avg_curve[i] = sum(vals) / len(vals) if vals else 0.0
+
+    # 选表现最极端的 top N（按当日振幅排序）用于单独曲线
+    amp = [(code, max(curve) - min(curve)) for code, curve in curves.items()]
+    amp.sort(key=lambda x: x[1], reverse=True)
+    top_stocks = [code for code, _ in amp[:12]]
+
+    plt.clear_figure()
+    plt.theme('dark')
+    plt.title(f'{day_str} 日内盈亏曲线 (5m)')
+    plt.xlabel('时间')
+    plt.ylabel('盈亏%')
+
+    colors = ['cyan', 'green', 'yellow', 'magenta', 'red', 'blue',
+              'white', 'orange', 'teal', 'gold', 'pink', 'lime']
+    for i, code in enumerate(top_stocks):
+        curve = curves[code]
+        sc = SecurityCode(code)
+        label = f"{sc.short_code}"
+        plt.plot(curve, label=label, color=colors[i % len(colors)])
+
+    # 平均线（粗白线）
+    plt.plot(avg_curve, label='AVG', color='white', linewidth=2)
+
+    plt.canvas_color('black')
+    plt.axes_color('black')
+    plt.ticks_color('white')
+    plt.show()
+    _CSL.print(f"[dim]曲线数: {len(top_stocks)} + AVG（共 {len(curves)} 只）[/dim]")
 
 
 def _safe_float(val) -> float:
@@ -2557,7 +2691,7 @@ def get_user_sector(
 
                 _detail_info = {**sector_info, 'stock.num': _stocks_num}
                 if is_verbose:
-                    _detail_info.update({"Stocks": [f"{stock.get('Code', '')} {stock.get('Name', '')}" for stock in _stocks_in_sector]})
+                    _detail_info.update({"Stocks": [f"{stock.get('Code', '')}|{stock.get('Name', '')}" for stock in _stocks_in_sector]})
                 sector_detail_infos.append(_detail_info)
 
                 # 管道：收集板块和个股
@@ -2569,7 +2703,6 @@ def get_user_sector(
 
             # 创建 DataFrame 并按 stock.num 排序
             df = pd.DataFrame(sector_detail_infos)
-            D("[test]", df=df)
             df_sorted = df.sort_values(by='stock.num', ascending=False)
             print_dataframe(df_sorted, f'自定义板块概要{f"（过滤含有 {contains} 的板块）" if sectors_filtered else ""}',
                             printer=_CSL.print)
@@ -2852,7 +2985,7 @@ def user_sector(
             only_in_1 = stocks1 - stocks2
             only_in_2 = stocks2 - stocks1
             in_both = stocks1 & stocks2
-            
+
             name1 = sectors_code2name.get(code1)
             name2 = sectors_code2name.get(code2)
 
@@ -3131,14 +3264,18 @@ def formula(
                     if not df.empty:
                         print_dataframe(df,
                                         title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（未过滤空值）",
-                                        table_max_rows=max_to_show, printer=_CSL.print)
+                                        table_max_rows=max_to_show, printer=_CSL.print, sep='_')
 
                 # zb 始终打印每股票详情；xg 仅在 verbose 时打印
                 if _is_zb or verbose:
                     if not df_cleaned.empty:
-                        print_dataframe(df_cleaned,
-                                        title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（已过滤空值）",
-                                        table_max_rows=max_to_show, printer=_CSL.print)
+                        if is_save_db:
+                            # 存数据库时尽量进行复杂打印以节省时间
+                            _CSL.print(df_cleaned)
+                        else:
+                            print_dataframe(df_cleaned,
+                                            title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（已过滤空值）",
+                                            table_max_rows=max_to_show, printer=_CSL.print)
 
                 if code_2_df is not None:
                     code_2_df[full_code] = df_cleaned if not df_cleaned.empty else df
@@ -4039,3 +4176,114 @@ def sync_history(_ctx: click.Context, start_date: str, end_date: str | None,
                    + (f" {n_fail[:10]}" if n_fail else ""))
     except Exception:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+              help='日期（默认从 from_block_name 中提取，如 吸完·首倍阳_5.20260710 → 20260710）')
+@click.option('--from-block-name', '-fb', 'from_block_name', required=True,
+              help='来源板块名称（从中提取个股，支持 -c 模糊匹配）')
+@click.option('--to-block-tip', '-tbt', 'to_block_tip', default='可买入',
+              help='目标板块后缀（如 "可买入" → XXXX.可买入.YYYYMMDD）')
+@click.option('--zm-min', '-zm-min', 'zm_min', type=float, default=None,
+              help='主买净额(万元) 最小值')
+@click.option('--zm-max', '-zm-max', 'zm_max', type=float, default=None,
+              help='主买净额(万元) 最大值')
+@click.option('--zl-min', '-zl-min', 'zl_min', type=float, default=None,
+              help='主力净流入(万元) 最小值')
+@click.option('--zl-max', '-zl-max', 'zl_max', type=float, default=None,
+              help='主力净流入(万元) 最大值')
+@click.option('--keep-zt', '-zt', 'keep_zt', is_flag=True, default=False, help='保留涨停股')
+@click.option('--keep-not-zt', '-nzt', 'keep_not_zt', is_flag=True, default=False, help='保留非涨停股')
+@click.option('--keep-dt', '-dt', 'keep_dt', is_flag=True, default=False, help='保留跌停股')
+@click.option('--keep-not-dt', '-ndt', 'keep_not_dt', is_flag=True, default=False, help='保留非跌停股')
+@click.pass_context
+def filter_to_block(_ctx: click.Context,
+    date: datetime | None,
+    from_block_name: str,
+    to_block_tip: str,
+    zm_min: float | None,
+    zm_max: float | None,
+    zl_min: float | None,
+    zl_max: float | None,
+    keep_zt: bool,
+    keep_not_zt: bool,
+    keep_dt: bool,
+    keep_not_dt: bool,
+):
+    """从自定义板块取股 → 资金流筛选 → 涨跌停过滤 → 存入新板块
+
+    等价于管道链: gus -c <from> | fcf -d <date> ... | fl ... | us -a create -n <to>
+    所有步骤在一次调用中完成。
+
+    使用示例：
+        ftb -fb 吸完·首倍阳_5.20260710 -zm-min 0 -zl-min 0 -nzt -ndt
+            → gus → fcf(d=20260710) → fl(nzt+ndt) → 创建板块「吸完·首倍阳_5.可买入.20260710」
+
+        ftb -fb 吸完·首倍阳_5.20260710 -zt -tbt 涨停票
+            → 仅保留涨停股，存入「吸完·首倍阳_5.涨停票.20260710」
+    """
+    _CSL = _ctx.obj['console']  # type: Console
+    import re
+
+    # ── 提取日期：优先用显式 --date，否则从 from_block_name 中取最后的8位数字 ──
+    if date is None:
+        m = re.search(r'(\d{8})', from_block_name)
+        if m:
+            date_str = m.group(1)
+            from difoss_stock_util.time_util import TimeUtils
+            date = TimeUtils.str_to_datetime(date_str)
+        if date is None:
+            _CSL.print(f"[red]无法从板块名 '{from_block_name}' 提取日期，请使用 -d 指定[/red]")
+            return
+
+    trading_date_str = date.strftime('%Y%m%d')
+    _CSL.print(f"\n[bold]🔗 一键筛选入库[/bold] — 日期: [yellow]{trading_date_str}[/yellow]")
+
+    # ── Step 1: 从自定义板块获取个股 ──
+    _CSL.print(f"[bold]Step 1/4[/bold] 从板块 [yellow]{from_block_name}[/yellow] 获取个股...")
+    result = _ctx.invoke(get_user_sector, contains=[from_block_name], cache_stocks=True)
+    stocks = result.get('stocks', set()) if isinstance(result, dict) else set()
+    if not stocks:
+        _CSL.print(f"[red]板块 '{from_block_name}' 中无个股[/red]")
+        return
+    _CSL.print(f"   获取到 [green]{len(stocks)}[/green] 只个股")
+
+    # ── Step 2: 主力资金流筛选 ──
+    if any(v is not None for v in (zm_min, zm_max, zl_min, zl_max)):
+        _CSL.print(f"[bold]Step 2/4[/bold] 主力资金流筛选...")
+        result = _ctx.invoke(filter_capital_flow,
+                             stocks=list(stocks), date=date,
+                             zm_min=zm_min, zm_max=zm_max,
+                             zl_min=zl_min, zl_max=zl_max,
+                             cache_stocks=True)
+        stocks = result.get('stocks', set()) if isinstance(result, dict) else set()
+        if not stocks:
+            _CSL.print("[yellow]资金流筛选后无个股剩余[/yellow]")
+            return
+        _CSL.print(f"   剩余 [green]{len(stocks)}[/green] 只")
+    else:
+        _CSL.print(f"[dim]Step 2/4 资金流筛选: 未设置过滤条件，跳过[/dim]")
+
+    # ── Step 3: 涨跌停过滤 ──
+    if any([keep_zt, keep_not_zt, keep_dt, keep_not_dt]):
+        _CSL.print(f"[bold]Step 3/4[/bold] 涨跌停筛选...")
+        result = _ctx.invoke(filter_limit,
+                             stocks=list(stocks), date=date,
+                             keep_zt=keep_zt, keep_not_zt=keep_not_zt,
+                             keep_dt=keep_dt, keep_not_dt=keep_not_dt,
+                             cache_stocks=True)
+        stocks = result.get('stocks', set()) if isinstance(result, dict) else set()
+        if not stocks:
+            _CSL.print("[yellow]涨跌停筛选后无个股剩余[/yellow]")
+            return
+        _CSL.print(f"   剩余 [green]{len(stocks)}[/green] 只")
+    else:
+        _CSL.print(f"[dim]Step 3/4 涨跌停筛选: 未设置过滤条件，跳过[/dim]")
+
+    # ── Step 4: 构建目标板块名并创建 ──
+    # 规则：原板块名去掉末尾日期 → 加 to_block_tip → 加日期
+    base_name = re.sub(r'\.?\d{8}$', '', from_block_name)  # 去掉末尾的日期
+    to_block_name = f"{base_name}.{to_block_tip}.{trading_date_str}"
+    _CSL.print(f"[bold]Step 4/4[/bold] 创建板块 [yellow]{to_block_name}[/yellow] 并添加 {len(stocks)} 只个股")
+    _ctx.invoke(user_sector, action='create', name=to_block_name, stocks=list(stocks))
+
+    _CSL.print(f"\n✅ 完成！板块 [yellow]{to_block_name}[/yellow] 共 [green]{len(stocks)}[/green] 只个股")

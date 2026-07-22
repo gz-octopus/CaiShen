@@ -59,14 +59,16 @@ def _example(_ctx: click.Context,
 
 
 @command_with_abbrev(abbrev='ip', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--type', '-t', 'type', type=click.Choice(['stock', 'future']), default='stock', help='选择数据源类型')
 @click.pass_context
 def best_ip(_ctx: click.Context,
+            type: str,
 ):
     """获取最佳IP地址"""
     _CSL = _ctx.obj['console'] # type: Console
     try:
         # 旧版本的 pytdx 内置的 ip 列表，可能不太准确了，后续可以考虑更新一下
-        ip = select_best_ip('future')
+        ip = select_best_ip(type)
         _CSL.print(f"最佳IP: {ip}")
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
@@ -285,11 +287,10 @@ def init(_ctx: click.Context):
     try:
         # xtdata.enable_hello = False
         # tq.initialize(__file__)
-        std_client = Quotes.factory(best_ip=True, valid_server=True, market='std', multithread=True)
-        # std_client = Quotes.factory(ip=IP, port=PORT, market='std', multithread=True)
+        # std_client = Quotes.factory(bestip=True, valid_server=True, market='std', multithread=True)
+        std_client = Quotes.factory(ip=IP, port=PORT, market='std', multithread=True)
         
         _ctx.obj['std_client'] = std_client
-        CONSOLE.print(f"best ip = {std_client.bestip}")
 
         std_reader = Reader.factory(market='std', tdxdir=tdx_root)
         _ctx.obj['std_reader'] = std_reader
