@@ -48,7 +48,7 @@ from time import sleep, time
 
 from cache_cmd import (STOCKS,
                        stocks_collector, blocks_collector, df_collector,
-                       memory_cache, data_frame,
+                       memory_cache, data_frame, blocks_2_stocks,
                        get_stock_name, cache_stock_name, is_st)
 
 # ---------------------------------------------------------------------------------------------
@@ -1718,6 +1718,7 @@ def get_stocks(_ctx: click.Context,
 # ---------------------------------------------------------------------------------------------
 # 个股板块归属 & 涨幅统计
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
 @blocks_collector
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
               default=STOCKS, required=False, help='股票代码列表 (如: 603358.SH)。管道模式下可从上游自动获取')
@@ -1729,6 +1730,10 @@ def get_stocks(_ctx: click.Context,
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的板块详情）')
 @click.option('--max-to-show', '-max', 'max_to_show', default=300, show_default=True, type=int,
               help='最多显示多少条板块记录')
+@click.option('--to-file', '-tf', 'to_file', type=str, default=None,
+              help='导出到 output/{name}.xlsx（每个 DataFrame 一个 sheet）')
+@click.option('--per-stock', '-ps', 'per_stock', is_flag=True,
+              help='逐只个股分析：每只股票单独 DataFrame + 独立 sheet')
 @click.pass_context
 def stock_block_stat(_ctx: click.Context,
     stocks: list[str],
@@ -1736,6 +1741,10 @@ def stock_block_stat(_ctx: click.Context,
     block_types: list[str],
     is_verbose: bool,
     max_to_show: int,
+    to_file: str | None,
+    per_stock: bool,
+    cache_stocks: bool,
+    stock_group_index: int,
     cache_blocks: bool,
     block_group_index: int,
 ):
@@ -1753,6 +1762,7 @@ def stock_block_stat(_ctx: click.Context,
         gsl -c 华为 | sbs                          # 管道：概念板块个股 → 板块统计
     """
     _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # 确定交易日期
@@ -1763,6 +1773,7 @@ def stock_block_stat(_ctx: click.Context,
         trading_date = date
 
     trading_date_str = trading_date.strftime('%Y%m%d')
+    is_realtime = (trading_date_str == datetime.now().strftime('%Y%m%d'))
 
     print_locals()
 
@@ -1811,6 +1822,7 @@ def stock_block_stat(_ctx: click.Context,
         progress_print(f"[bold]STEP 2/3[/bold] 获取个股所属板块...")
         block_to_stocks = defaultdict(list) # 记录每个板块下的个股列表（仅在筛选样本 stocks 中）
         block_2_infos = {}
+        stock_2_blocks = defaultdict(list)  # stock → [block_code]（-ps 模式用）
         stock_details = []  # 用于 verbose 打印
 
         for _, stock_code in enumerate_with_progress(stocks_list, task_name="获取个股所属板块"):
@@ -1842,8 +1854,8 @@ def stock_block_stat(_ctx: click.Context,
                         }
 
                     block_infos.append('|'.join([bc, bn, bt, str(gn_num)]))
-
                     block_to_stocks[bc].append(full_code)
+                    stock_2_blocks[full_code].append(bc)
 
             if is_verbose:
                 change = stock_change_pct.get(full_code, None)
@@ -1858,18 +1870,43 @@ def stock_block_stat(_ctx: click.Context,
         # ── Step 3: 聚合统计并打印 ──
         progress_print(f"[bold]STEP 3/3[/bold] 聚合板块统计...")
         block_stats = []
+        block_stats_map = {}  # block_code → stats dict（供 -ps 模式复用）
+
+        # 历史日期：主力资金数据从 stock_metrics DB 获取
+        if not is_realtime:
+            db_url = _assemble_db_url(DB_TYPE, _CFG)
+            StockMetrics.init_db(db_url)
+
         for block_code, stocks_in_block in block_to_stocks.items():
             block_name = block_2_infos.get(block_code, {}).get('BlockName', '')
             changes = [stock_change_pct.get(s) for s in stocks_in_block
                        if stock_change_pct.get(s) is not None]
             avg_change = round(sum(changes) / len(changes), 2) if changes else 0
 
-            # 版块实时更多信息
-            block_more_info = tq.get_more_info(stock_code=block_code, field_list=['fHSL', 'fLianB', 'Zjl', 'Zjl_HB'])
-            # 板块快照信息
-            block_snapshot = tq.get_market_snapshot(stock_code=block_code, field_list=['Inside', 'Outside', 'UpHome', 'DownHome'])
+            # 资金数据：实时走 get_more_info，历史走 stock_metrics DB（万元→亿元）
+            if is_realtime:
+                block_more_info = tq.get_more_info(stock_code=block_code,
+                                                   field_list=['fHSL', 'fLianB', 'Zjl', 'Zjl_HB'])
+                zjl_val = float(block_more_info.get('Zjl', '0')) / 10000
+                zjl_hb_val = float(block_more_info.get('Zjl_HB', '0')) / 10000
+            else:
+                block_more_info = tq.get_more_info(stock_code=block_code, field_list=['fHSL', 'fLianB'])
+                rows_zjl = StockMetrics.query(db_url, block_code, '1d',
+                                              trading_date_str, trading_date_str,
+                                              dividend_type=1,
+                                              formula_key='L2_DATA', indicator_key='主买净额')
+                rows_hb = StockMetrics.query(db_url, block_code, '1d',
+                                             trading_date_str, trading_date_str,
+                                             dividend_type=1,
+                                             formula_key='L2_DATA', indicator_key='主力净额')
+                zjl_val = _safe_float(rows_zjl[0]['value']) / 10000 if rows_zjl else 0
+                zjl_hb_val = _safe_float(rows_hb[0]['value']) / 10000 if rows_hb else 0
 
-            block_stats.append({
+            # 板块快照信息（涨跌停涨跌家数，仅实时有效）
+            block_snapshot = tq.get_market_snapshot(stock_code=block_code,
+                                                    field_list=['Inside', 'Outside', 'UpHome', 'DownHome'])
+
+            row_data = {
                 '板块代码': block_code,
                 '板块名称': block_name,
                 '板块成分股数量': block_2_infos.get(block_code, {}).get('GPNume', 0),
@@ -1881,13 +1918,40 @@ def stock_block_stat(_ctx: click.Context,
                 '跌停': block_snapshot.get('Inside', 0),
                 '换手率%': float(block_more_info.get('fHSL', '0')),
                 '量比': float(block_more_info.get('fLianB', '0')),
-                '主买净额(亿)': float(block_more_info.get('Zjl', '0')) / 10000,
-                '主力净额(亿)': float(block_more_info.get('Zjl_HB', '0')) / 10000,
-            })
+                '主买净额(亿)': zjl_val,
+                '主力净额(亿)': zjl_hb_val,
+            }
+            block_stats.append(row_data)
+            block_stats_map[block_code] = row_data  # 缓存供 -ps 模式
 
         # 按个股数降序
         block_stats.sort(key=lambda x: x['个股数'], reverse=True)
         df_stats = pd.DataFrame(block_stats)
+
+        # ── 逐只个股 DataFrame（-ps 模式）──
+        per_stock_dfs = {}
+        if per_stock:
+            for stock_code, block_codes in stock_2_blocks.items():
+                rows = []
+                for bc in block_codes:
+                    bs = block_stats_map.get(bc, {})
+                    binfo = block_2_infos.get(bc, {})
+                    rows.append({
+                        '板块代码': bc,
+                        '板块名称': bs.get('板块名称', binfo.get('BlockName', '')),
+                        '板块类型': binfo.get('BlockType', ''),
+                        '成分股数': binfo.get('GPNume', 0),
+                        '涨(家)': bs.get('涨(家)', 0),
+                        '涨停': bs.get('涨停', 0),
+                        '跌(家)': bs.get('跌(家)', 0),
+                        '跌停': bs.get('跌停', 0),
+                        '换手率%': bs.get('换手率%', 0),
+                        '量比': bs.get('量比', 0),
+                        '主买净额(亿)': bs.get('主买净额(亿)', 0),
+                        '主力净额(亿)': bs.get('主力净额(亿)', 0),
+                    })
+                if rows:
+                    per_stock_dfs[stock_code] = pd.DataFrame(rows)
 
         _CSL.print(f"\n[bold]📊 板块归属统计[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
                       f"个股: [yellow]{len(stocks_list)}[/yellow] 只，"
@@ -1895,7 +1959,7 @@ def stock_block_stat(_ctx: click.Context,
         print_dataframe(df_stats,
                         title=f"板块聚合（按个股数降序，共 {len(df_stats)} 个板块）",
                         table_max_rows=max_to_show, show_footer=True, printer=_CSL.print,
-                        sum_cols=['个股数', '涨(家)', '涨停', '跌(家)', '跌停', '主买净额(亿)', '主力净额(亿)'],
+                        sum_cols=['涨(家)', '涨停', '跌(家)', '跌停', '主买净额(亿)', '主力净额(亿)'],
                         avg_cols=['均涨幅%', '换手率%', '量比'])
 
         if is_verbose:
@@ -1903,12 +1967,51 @@ def stock_block_stat(_ctx: click.Context,
             print_dataframe(df_detail, title="个股详情", sum_cols=['所属板块数'], avg_cols=['所属板块数', '涨幅%'], table_max_rows=max_to_show,
                             show_footer=True, printer=_CSL.print)
 
+        # ── 逐只个股分析 ──
+        if per_stock:
+            for stock_code, stock_df in per_stock_dfs.items():
+                sc = SecurityCode(stock_code)
+                change = stock_change_pct.get(stock_code, None)
+                title = (f"{sc.short_code} {get_stock_name(stock_code, '')}"
+                         f" 板块归属（涨幅 {change:.2f}%）" if change is not None
+                         else f"{sc.short_code} {get_stock_name(stock_code, '')} 板块归属")
+                print_dataframe(stock_df, title=title, show_footer=True,
+                                sum_cols=['主买净额(亿)', '主力净额(亿)'],
+                                table_max_rows=max_to_show, printer=_CSL.print)
+
+        # ── 导出 xlsx ──
+        sheets = [('板块聚合', df_stats)]
+        if is_verbose:
+            sheets.append(('个股详情', pd.DataFrame(stock_details)))
+        if per_stock:
+            for stock_code, stock_df in per_stock_dfs.items():
+                sc = SecurityCode(stock_code)
+                sheets.append((sc.short_code, stock_df))
+        _export_to_xlsx(to_file, sheets)
+
         # ── 管道返回 ──
-        if cache_blocks or _is_pipe_producer:
-            return {'blocks': list(block_2_infos.keys())}
+        result = {'stocks': set(stocks_list), 'blocks': list(block_2_infos.keys())}
+        if per_stock and per_stock_dfs:
+            result['dfs'] = per_stock_dfs
+        if cache_stocks or cache_blocks or _is_pipe_producer:
+            return result
 
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+def _export_to_xlsx(filename: str | None, sheets: list[tuple[str, pd.DataFrame]]):
+    """导出多 DataFrame 到 output/{filename}.xlsx，每个 tuple 一个 sheet"""
+    if not filename or not sheets:
+        return
+    import os
+    os.makedirs('output', exist_ok=True)
+    path = os.path.join('output', f"{filename}.xlsx")
+    with pd.ExcelWriter(path, engine='openpyxl') as w:
+        for sheet_name, df in sheets:
+            safe = sheet_name[:31]  # Excel sheet name limit
+            df.to_excel(w, sheet_name=safe, index=False)
+    I(f"导出: {path}")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1930,6 +2033,8 @@ def stock_block_stat(_ctx: click.Context,
               help='仅显示涨/跌幅前 N 名（0 表示全部）')
 @click.option('--max-to-show', '-max', 'max_to_show', default=200, show_default=True, type=int,
               help='每张表最多显示多少条记录')
+@click.option('--to-file', '-tf', 'to_file', type=str, default=None,
+              help='导出到 output/{name}.xlsx（每个 DataFrame 一个 sheet）')
 @click.pass_context
 def stock_stat(_ctx: click.Context,
     stocks: list[str],
@@ -1940,6 +2045,7 @@ def stock_stat(_ctx: click.Context,
     is_verbose: bool,
     top_n: int,
     max_to_show: int,
+    to_file: str | None,
     cache_stocks: bool,
     stock_group_index: int,
 ):
@@ -1983,6 +2089,7 @@ def stock_stat(_ctx: click.Context,
             _CSL.print("[red]未提供任何股票代码（请通过 -s 参数、管道上游 或 缓存内存提供）[/red]")
             return
 
+        _sheets = []  # 收集导出 sheet
         mode_label = "逐日持仓" if daily else "持仓盈亏"
         _CSL.print(f"\n[bold]📈 {mode_label}统计[/bold] — "
                       f"买入: [yellow]{entry_date_str}[/yellow]，"
@@ -2066,7 +2173,7 @@ def stock_stat(_ctx: click.Context,
         # ── Step 3a: 逐日输出模式 ──
         if daily:
             progress_print(f"[bold]STEP 3/3[/bold] 逐日输出持仓表（共 {len(trading_days)} 个交易日）...")
-            for _, day in enumerate_with_progress(trading_days, task_name="逐日输出"):
+            for _, day in enumerate(trading_days):
                 day_rows = []
                 for full_code, info in stock_pnl.items():
                     pnl_list = info['daily']
@@ -2079,9 +2186,11 @@ def stock_stat(_ctx: click.Context,
                     if day_data is None:
                         continue
                     sc = SecurityCode(full_code)
+                    entry_close = info.get('entry_close', 0)
                     day_rows.append({
                         '代码': sc.short_code,
                         '名称': get_stock_name(full_code, ''),
+                        '买入价': round(entry_close, 2),
                         '收盘': day_data['close'],
                         '盈亏.收盘%': day_data['close_pnl'],
                         '盈亏.最高%': day_data['high_pnl'],
@@ -2098,7 +2207,7 @@ def stock_stat(_ctx: click.Context,
 
                 day_str = day.strftime('%Y%m%d') if hasattr(day, 'strftime') else str(day)[:10]
                 print_dataframe(df_day,
-                                title=f"📅 {day_str} 持仓盈亏（共 {len(day_rows)} 只）",
+                                title=f"📅 {day_str} 持仓盈亏（买入日 {entry_date_str}，共 {len(day_rows)} 只）",
                                 table_max_rows=max_to_show,
                                 avg_cols=['盈亏.收盘%', '盈亏.最高%', '盈亏.最低%'],
                                 show_footer=True, printer=_CSL.print)
@@ -2106,6 +2215,8 @@ def stock_stat(_ctx: click.Context,
                 # ── 日内盈亏曲线（需 plotext）──
                 if intraday and all_passed:
                     _plot_intraday(_ctx, day, all_passed, stock_pnl, _CSL)
+
+                _sheets.append((day_str, df_day))
         else:
             # ── Step 3b: 最终汇总模式 ──
             stock_results = []
@@ -2139,6 +2250,7 @@ def stock_stat(_ctx: click.Context,
                 return
 
             df_summary = pd.DataFrame(stock_results).sort_values('盈亏.收盘%', ascending=False).reset_index(drop=True)
+            _sheets.append(('持仓盈亏', df_summary))
 
             if top_n > 0:
                 half = top_n // 2 if top_n > 1 else 1
@@ -2151,7 +2263,6 @@ def stock_stat(_ctx: click.Context,
                             title=f"持仓盈亏（共 {len(df_summary)} 只）买入日 {entry_date_str}，截止 {end_date_str}，"
                                   + (f"，显示涨跌前 {top_n} 名" if top_n > 0 else ""),
                             table_max_rows=max_to_show,
-                            sum_cols=['持有天数'],
                             avg_cols=['盈亏.收盘%', '盈亏.最高%', '盈亏.最低%'],
                             show_footer=True, printer=_CSL.print)
 
@@ -2168,6 +2279,10 @@ def stock_stat(_ctx: click.Context,
                 print_dataframe(df_detail[daily_cols],
                                 title=f"{sc.short_code} {get_stock_name(full_code, '')} 逐日明细（共 {len(pnl_list)} 天）",
                                 table_max_rows=max_to_show, show_footer=True, printer=_CSL.print)
+                _sheets.append((sc.short_code, df_detail[daily_cols]))
+
+        # ── 导出 xlsx ──
+        _export_to_xlsx(to_file, _sheets)
 
         # ── 管道返回 ──
         if cache_stocks or _is_pipe_producer:
@@ -3275,7 +3390,7 @@ def formula(
                         else:
                             print_dataframe(df_cleaned,
                                             title=f"{full_code} {get_stock_name(full_code)} 在{_ft_name} {name} 的输出（已过滤空值）",
-                                            table_max_rows=max_to_show, printer=_CSL.print)
+                                            table_max_rows=max_to_show, printer=_CSL.print, sep='_')
 
                 if code_2_df is not None:
                     code_2_df[full_code] = df_cleaned if not df_cleaned.empty else df
@@ -3640,7 +3755,7 @@ def formula_multi(
 @click.option('--count', '-c', 'count', default=20, type=int,
               help='返回最近 N 条记录（count>0 时忽略 start_time）')
 @click.option('--formula-key', '-fk', 'formula_key',
-              help='按公式 key 过滤（如 L2_DATA|0，不传则返回全部）')
+              help='按公式 key 过滤（如 L2_DATA，不传则返回全部）')
 @click.option('--indicator-key', '-ik', 'indicator_key',
               help='进一步提取特定指标值（如 DDX）')
 @click.option('--db-type', '-db', 'db_type', default=None,
@@ -3696,9 +3811,9 @@ def get_stock_metrics(_ctx: click.Context,
                 indicator_key=indicator_key,
             )
 
-            # 限制返回条数（count > 0 时）
+            # 限制返回条数（count > 0 时取最早的 N 条，即从 start_time 开始数）
             if count > 0:
-                rows = rows[:count]
+                rows = rows[-count:]  # query 返回 DESC，[-count:] = 最旧 count 条
 
             if not rows:
                 _CSL.print(f"[dim]{full_code} {get_stock_name(full_code)} — 无数据[/dim]")
@@ -3854,21 +3969,6 @@ def print_pipe(_ctx: click.Context,
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
-@click.option('--block', '-b', 'blocks', multiple=True, callback=split_comma_stocks, required=True, help='通达信板块代码列表 (如: 880672.SH，可带半角逗号分隔)')
-@click.pass_context
-def blocks_2_stocks(_ctx: click.Context,
-    blocks: list[str],
-):
-    """把 blocks 直接放到 stocks 中，方便后续管道使用"""
-    _CSL = _ctx.obj['console'] # type: Console
-
-    try:
-        return {'stocks': blocks}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
-    except Exception as e:
-        _CSL.print_exception(extra_lines=5, show_locals=True)
-
-
-@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @stocks_collector
 @click.option('--file', '-f', 'file_path', type=click.Path(exists=True, dir_okay=False, readable=True), required=True, help='包含股票代码的文件路径（每行一个股票代码）')
 @click.option('--key', '-k', 'key', default='stocks', show_default=True, help='返回的 key 名称')
@@ -3959,57 +4059,85 @@ def save_to_file(_ctx: click.Context,
                   cache_stocks: bool,
                   stock_group_index: int,
                   **kwargs):
-    """将 stocks 保存到文件中（与 read_from_file 对应）
+    """保存 stocks / df / dfs 到文件（与 read_from_file 对应）
 
-    根据 --file 后缀名自动识别格式：.txt / .csv / .xlsx / .json。
+    根据 --file 后缀名自动识别格式：
+    - .xlsx: 所有数据同一文件，stocks→sheet「stocks」、df→sheet「df」、dfs 逐 key
+    - .txt/.csv/.json: 仅 stocks
+
+    管道模式下自动获取上游的 stocks / df / dfs。
     文件路径不含 / 或 \\ 时自动加上 output/ 前缀。
 
     使用示例：
-        gs -m 50 | sf -f all_a.txt                       # → output/all_a.txt
-        fl | sf -f D:/data/filtered.xlsx                  # → 绝对路径
-        sf -f result.json -k 'my_stocks'                 # → output/result.json
+        gs -m 50 | sf -f all_a.txt
+        ss -s 603358.SH -dl -tf daily_pnl | sf -f report.xlsx
     """
     _CSL = _ctx.obj['console']  # type: Console
 
     try:
-        stocks_list = list(stocks)
-        if not stocks_list:
-            _CSL.print("[red]未提供任何股票代码[/red]")
-            return
+        import os
+
+        # ── 收集数据：CLI stocks + 管道 pipe_data ──
+        pipe_data = _ctx.obj.get('_pipe_data', {})
+        stocks_list = list(stocks) if stocks else []
+        if pipe_data:
+            if not stocks_list:
+                stocks_list = list(pipe_data.get('stocks', set()))
+        pipe_df = pipe_data.get('df')  # single DataFrame
+        pipe_dfs = pipe_data.get('dfs', {})  # dict[str, DataFrame]
 
         # 无路径分隔符 → 自动加 output/ 前缀
-        import os
         if '/' not in file_path and '\\' not in file_path:
             os.makedirs('output', exist_ok=True)
             file_path = os.path.join('output', file_path)
 
-        # 后缀名 → 文件类型
         ext = os.path.splitext(file_path)[1].lower()
         if ext not in ('.txt', '.csv', '.xlsx', '.json'):
             _CSL.print(f"[red]不支持的文件后缀: {ext}（支持 .txt / .csv / .xlsx / .json）[/red]")
             return
 
-        if ext == '.txt':
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(stocks_list))
-        elif ext == '.csv':
-            import csv
-            with open(file_path, 'w', encoding='utf-8', newline='') as f:
-                writer = csv.writer(f)
-                for s in stocks_list:
-                    writer.writerow([s])
-        elif ext == '.xlsx':
+        # ── xlsx: 所有数据同一文件 ──
+        if ext == '.xlsx':
             import pandas as pd
-            df = pd.DataFrame({key: stocks_list})
-            df.to_excel(file_path, index=False)
-        elif ext == '.json':
-            import json
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump({key: stocks_list}, f, ensure_ascii=False, indent=2)
+            sheets = []
+            if stocks_list:
+                sheets.append(('stocks', pd.DataFrame({key: stocks_list})))
+            if pipe_df is not None and isinstance(pipe_df, pd.DataFrame) and not pipe_df.empty:
+                sheets.append(('df', pipe_df))
+            if pipe_dfs:
+                for k, v in pipe_dfs.items():
+                    if isinstance(v, pd.DataFrame) and not v.empty:
+                        safe = str(k)[:31]
+                        sheets.append((safe, v))
+            if not sheets:
+                _CSL.print("[red]无数据可保存（stocks/df/dfs 均为空）[/red]")
+                return
+            with pd.ExcelWriter(file_path, engine='openpyxl') as w:
+                for sheet_name, s_df in sheets:
+                    s_df.to_excel(w, sheet_name=sheet_name, index=False)
+            parts = [f"{s[0]}:{len(s[1])}行" for s in sheets]
+            _CSL.print(f"✅ 已保存到 [yellow]{file_path}[/yellow]（{'，'.join(parts)}）")
+        elif stocks_list:
+            # ── 非 xlsx: 仅 stocks ──
+            if ext == '.txt':
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(stocks_list))
+            elif ext == '.csv':
+                import csv
+                with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                    writer = csv.writer(f)
+                    for s in stocks_list:
+                        writer.writerow([s])
+            elif ext == '.json':
+                import json
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump({key: stocks_list}, f, ensure_ascii=False, indent=2)
+            _CSL.print(f"✅ 已保存 [green]{len(stocks_list)}[/green] 只股票到 [yellow]{file_path}[/yellow]")
+        else:
+            _CSL.print("[red]无数据可保存（stocks/df/dfs 均为空）[/red]")
+            return
 
-        _CSL.print(f"✅ 已保存 [green]{len(stocks_list)}[/green] 只股票到 [yellow]{file_path}[/yellow]")
-
-        if cache_stocks:
+        if cache_stocks and stocks_list:
             return {'stocks': stocks_list}
 
     except Exception as e:

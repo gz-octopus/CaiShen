@@ -32,8 +32,8 @@ data_source: tdx
 
 # 银河证券.星耀数智
 amazing_data:
-  host: ${AD_HOST:101.230.159.234}
-  port: ${AD_HOST:8600}
+  host: ${AD_HOST:-101.230.159.234}
+  port: ${AD_PORT:-8600}
   username: ${AD_USERNAME}
   password: ${AD_PASSWORD}
 

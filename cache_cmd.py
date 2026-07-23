@@ -15,7 +15,7 @@ from typing import Optional, Callable, Dict, Iterable
 from datetime import datetime
 from collections import defaultdict
 
-from rich import console
+from rich.console import Console
 from rich.pretty import Pretty
 import threading
 import functools
@@ -195,7 +195,7 @@ CACHE = CacheManager()
 
 def _print_status(targets: Dict[Optional[int], set],
                   contains: list[str],
-                  console: console.Console,
+                  console: Console,
                   max_to_show: int,
                   with_name: bool):
     """
@@ -325,7 +325,7 @@ def memory_cache(_ctx: click.Context,
     """内存缓存（仅在REPL下有效）"""
     # print_locals() # DEBUG
 
-    _CSL = _ctx.obj['console'] # type: console.Console
+    _CSL = _ctx.obj['console'] # type: Console
     global STOCKS, GROUPED_STOCKS, _LOCK
 
     # 1. 确定操作目标集
@@ -439,7 +439,7 @@ def data_frame(_ctx: click.Context,
                prefix: str,
 ):
     """显示 DataFrame 缓存状态 (STOCKS_DF 和 STOCK_2_DF)"""
-    _CSL = _ctx.obj['console'] # type: console.Console
+    _CSL = _ctx.obj['console'] # type: Console
 
     print_locals(printer=_CSL.print)
     global STOCKS_DF, STOCK_2_DF
@@ -543,6 +543,21 @@ def data_frame(_ctx: click.Context,
                     break # 只显示一个就足够
             else:
                 _CSL.print("STOCK_2_DF 缓存为空。")
+
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--block', '-b', 'blocks', multiple=True, callback=split_comma_stocks, required=True, help='通达信板块代码列表 (如: 880672.SH，可带半角逗号分隔)')
+@click.pass_context
+def blocks_2_stocks(_ctx: click.Context,
+    blocks: list[str],
+):
+    """把 blocks 直接放到 stocks 中，方便后续管道使用"""
+    _CSL = _ctx.obj['console'] # type: Console
+
+    try:
+        return {'stocks': blocks}  # 返回就会被 stocks_collector 添加到 cache_cmd.STOCKS 中
+    except Exception as e:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
 def _stocks_collector_v0(func):
@@ -655,7 +670,6 @@ def stocks_collector(
         return functools.update_wrapper(wrapper, f)
 
     return decorator(func) if func else decorator
-
 
 def blocks_collector(
     func=None, *,
