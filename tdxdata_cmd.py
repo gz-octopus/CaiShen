@@ -1744,6 +1744,7 @@ def stock_block_stat(_ctx: click.Context,
         gsl -c 华为 | sbs                          # 管道：概念板块个股 → 板块统计
     """
     _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # 确定交易日期
@@ -1754,6 +1755,7 @@ def stock_block_stat(_ctx: click.Context,
         trading_date = date
 
     trading_date_str = trading_date.strftime('%Y%m%d')
+    is_realtime = (trading_date_str == datetime.now().strftime('%Y%m%d'))
 
     print_locals()
 
@@ -1851,16 +1853,40 @@ def stock_block_stat(_ctx: click.Context,
         progress_print(f"[bold]STEP 3/3[/bold] 聚合板块统计...")
         block_stats = []
         block_stats_map = {}  # block_code → stats dict（供 -ps 模式复用）
+
+        # 历史日期：主力资金数据从 stock_metrics DB 获取
+        if not is_realtime:
+            db_url = _assemble_db_url(DB_TYPE, _CFG)
+            StockMetrics.init_db(db_url)
+
         for block_code, stocks_in_block in block_to_stocks.items():
             block_name = block_2_infos.get(block_code, {}).get('BlockName', '')
             changes = [stock_change_pct.get(s) for s in stocks_in_block
                        if stock_change_pct.get(s) is not None]
             avg_change = round(sum(changes) / len(changes), 2) if changes else 0
 
-            # 版块实时更多信息
-            block_more_info = tq.get_more_info(stock_code=block_code, field_list=['fHSL', 'fLianB', 'Zjl', 'Zjl_HB'])
-            # 板块快照信息
-            block_snapshot = tq.get_market_snapshot(stock_code=block_code, field_list=['Inside', 'Outside', 'UpHome', 'DownHome'])
+            # 资金数据：实时走 get_more_info，历史走 stock_metrics DB（万元→亿元）
+            if is_realtime:
+                block_more_info = tq.get_more_info(stock_code=block_code,
+                                                   field_list=['fHSL', 'fLianB', 'Zjl', 'Zjl_HB'])
+                zjl_val = float(block_more_info.get('Zjl', '0')) / 10000
+                zjl_hb_val = float(block_more_info.get('Zjl_HB', '0')) / 10000
+            else:
+                block_more_info = tq.get_more_info(stock_code=block_code, field_list=['fHSL', 'fLianB'])
+                rows_zjl = StockMetrics.query(db_url, block_code, '1d',
+                                              trading_date_str, trading_date_str,
+                                              dividend_type=1,
+                                              formula_key='L2_DATA', indicator_key='主买净额')
+                rows_hb = StockMetrics.query(db_url, block_code, '1d',
+                                             trading_date_str, trading_date_str,
+                                             dividend_type=1,
+                                             formula_key='L2_DATA', indicator_key='主力净额')
+                zjl_val = _safe_float(rows_zjl[0]['value']) / 10000 if rows_zjl else 0
+                zjl_hb_val = _safe_float(rows_hb[0]['value']) / 10000 if rows_hb else 0
+
+            # 板块快照信息（涨跌停涨跌家数，仅实时有效）
+            block_snapshot = tq.get_market_snapshot(stock_code=block_code,
+                                                    field_list=['Inside', 'Outside', 'UpHome', 'DownHome'])
 
             row_data = {
                 '板块代码': block_code,
@@ -1874,8 +1900,8 @@ def stock_block_stat(_ctx: click.Context,
                 '跌停': block_snapshot.get('Inside', 0),
                 '换手率%': float(block_more_info.get('fHSL', '0')),
                 '量比': float(block_more_info.get('fLianB', '0')),
-                '主买净额(亿)': float(block_more_info.get('Zjl', '0')) / 10000,
-                '主力净额(亿)': float(block_more_info.get('Zjl_HB', '0')) / 10000,
+                '主买净额(亿)': zjl_val,
+                '主力净额(亿)': zjl_hb_val,
             }
             block_stats.append(row_data)
             block_stats_map[block_code] = row_data  # 缓存供 -ps 模式
@@ -1915,7 +1941,7 @@ def stock_block_stat(_ctx: click.Context,
         print_dataframe(df_stats,
                         title=f"板块聚合（按个股数降序，共 {len(df_stats)} 个板块）",
                         table_max_rows=max_to_show, show_footer=True, printer=_CSL.print,
-                        sum_cols=['个股数', '涨(家)', '涨停', '跌(家)', '跌停', '主买净额(亿)', '主力净额(亿)'],
+                        sum_cols=['涨(家)', '涨停', '跌(家)', '跌停', '主买净额(亿)', '主力净额(亿)'],
                         avg_cols=['均涨幅%', '换手率%', '量比'])
 
         if is_verbose:
@@ -1932,6 +1958,7 @@ def stock_block_stat(_ctx: click.Context,
                          f" 板块归属（涨幅 {change:.2f}%）" if change is not None
                          else f"{sc.short_code} {get_stock_name(stock_code, '')} 板块归属")
                 print_dataframe(stock_df, title=title, show_footer=True,
+                                sum_cols=['主买净额(亿)', '主力净额(亿)'],
                                 table_max_rows=max_to_show, printer=_CSL.print)
 
         # ── 导出 xlsx ──
@@ -2218,7 +2245,6 @@ def stock_stat(_ctx: click.Context,
                             title=f"持仓盈亏（共 {len(df_summary)} 只）买入日 {entry_date_str}，截止 {end_date_str}，"
                                   + (f"，显示涨跌前 {top_n} 名" if top_n > 0 else ""),
                             table_max_rows=max_to_show,
-                            sum_cols=['持有天数'],
                             avg_cols=['盈亏.收盘%', '盈亏.最高%', '盈亏.最低%'],
                             show_footer=True, printer=_CSL.print)
 
