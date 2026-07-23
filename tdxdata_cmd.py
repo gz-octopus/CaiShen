@@ -1700,6 +1700,7 @@ def get_stocks(_ctx: click.Context,
 # ---------------------------------------------------------------------------------------------
 # 个股板块归属 & 涨幅统计
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
 @blocks_collector
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
               default=STOCKS, required=False, help='股票代码列表 (如: 603358.SH)。管道模式下可从上游自动获取')
@@ -1713,6 +1714,8 @@ def get_stocks(_ctx: click.Context,
               help='最多显示多少条板块记录')
 @click.option('--to-file', '-tf', 'to_file', type=str, default=None,
               help='导出到 output/{name}.xlsx（每个 DataFrame 一个 sheet）')
+@click.option('--per-stock', '-ps', 'per_stock', is_flag=True,
+              help='逐只个股分析：每只股票单独 DataFrame + 独立 sheet')
 @click.pass_context
 def stock_block_stat(_ctx: click.Context,
     stocks: list[str],
@@ -1721,6 +1724,9 @@ def stock_block_stat(_ctx: click.Context,
     is_verbose: bool,
     max_to_show: int,
     to_file: str | None,
+    per_stock: bool,
+    cache_stocks: bool,
+    stock_group_index: int,
     cache_blocks: bool,
     block_group_index: int,
 ):
@@ -1796,6 +1802,7 @@ def stock_block_stat(_ctx: click.Context,
         progress_print(f"[bold]STEP 2/3[/bold] 获取个股所属板块...")
         block_to_stocks = defaultdict(list) # 记录每个板块下的个股列表（仅在筛选样本 stocks 中）
         block_2_infos = {}
+        stock_2_blocks = defaultdict(list)  # stock → [block_code]（-ps 模式用）
         stock_details = []  # 用于 verbose 打印
 
         for _, stock_code in enumerate_with_progress(stocks_list, task_name="获取个股所属板块"):
@@ -1827,8 +1834,8 @@ def stock_block_stat(_ctx: click.Context,
                         }
 
                     block_infos.append('|'.join([bc, bn, bt, str(gn_num)]))
-
                     block_to_stocks[bc].append(full_code)
+                    stock_2_blocks[full_code].append(bc)
 
             if is_verbose:
                 change = stock_change_pct.get(full_code, None)
@@ -1843,6 +1850,7 @@ def stock_block_stat(_ctx: click.Context,
         # ── Step 3: 聚合统计并打印 ──
         progress_print(f"[bold]STEP 3/3[/bold] 聚合板块统计...")
         block_stats = []
+        block_stats_map = {}  # block_code → stats dict（供 -ps 模式复用）
         for block_code, stocks_in_block in block_to_stocks.items():
             block_name = block_2_infos.get(block_code, {}).get('BlockName', '')
             changes = [stock_change_pct.get(s) for s in stocks_in_block
@@ -1854,7 +1862,7 @@ def stock_block_stat(_ctx: click.Context,
             # 板块快照信息
             block_snapshot = tq.get_market_snapshot(stock_code=block_code, field_list=['Inside', 'Outside', 'UpHome', 'DownHome'])
 
-            block_stats.append({
+            row_data = {
                 '板块代码': block_code,
                 '板块名称': block_name,
                 '板块成分股数量': block_2_infos.get(block_code, {}).get('GPNume', 0),
@@ -1868,11 +1876,38 @@ def stock_block_stat(_ctx: click.Context,
                 '量比': float(block_more_info.get('fLianB', '0')),
                 '主买净额(亿)': float(block_more_info.get('Zjl', '0')) / 10000,
                 '主力净额(亿)': float(block_more_info.get('Zjl_HB', '0')) / 10000,
-            })
+            }
+            block_stats.append(row_data)
+            block_stats_map[block_code] = row_data  # 缓存供 -ps 模式
 
         # 按个股数降序
         block_stats.sort(key=lambda x: x['个股数'], reverse=True)
         df_stats = pd.DataFrame(block_stats)
+
+        # ── 逐只个股 DataFrame（-ps 模式）──
+        per_stock_dfs = {}
+        if per_stock:
+            for stock_code, block_codes in stock_2_blocks.items():
+                rows = []
+                for bc in block_codes:
+                    bs = block_stats_map.get(bc, {})
+                    binfo = block_2_infos.get(bc, {})
+                    rows.append({
+                        '板块代码': bc,
+                        '板块名称': bs.get('板块名称', binfo.get('BlockName', '')),
+                        '板块类型': binfo.get('BlockType', ''),
+                        '成分股数': binfo.get('GPNume', 0),
+                        '涨(家)': bs.get('涨(家)', 0),
+                        '涨停': bs.get('涨停', 0),
+                        '跌(家)': bs.get('跌(家)', 0),
+                        '跌停': bs.get('跌停', 0),
+                        '换手率%': bs.get('换手率%', 0),
+                        '量比': bs.get('量比', 0),
+                        '主买净额(亿)': bs.get('主买净额(亿)', 0),
+                        '主力净额(亿)': bs.get('主力净额(亿)', 0),
+                    })
+                if rows:
+                    per_stock_dfs[stock_code] = pd.DataFrame(rows)
 
         _CSL.print(f"\n[bold]📊 板块归属统计[/bold] — 日期: [yellow]{trading_date_str}[/yellow]，"
                       f"个股: [yellow]{len(stocks_list)}[/yellow] 只，"
@@ -1888,13 +1923,33 @@ def stock_block_stat(_ctx: click.Context,
             print_dataframe(df_detail, title="个股详情", sum_cols=['所属板块数'], avg_cols=['所属板块数', '涨幅%'], table_max_rows=max_to_show,
                             show_footer=True, printer=_CSL.print)
 
+        # ── 逐只个股分析 ──
+        if per_stock:
+            for stock_code, stock_df in per_stock_dfs.items():
+                sc = SecurityCode(stock_code)
+                change = stock_change_pct.get(stock_code, None)
+                title = (f"{sc.short_code} {get_stock_name(stock_code, '')}"
+                         f" 板块归属（涨幅 {change:.2f}%）" if change is not None
+                         else f"{sc.short_code} {get_stock_name(stock_code, '')} 板块归属")
+                print_dataframe(stock_df, title=title, show_footer=True,
+                                table_max_rows=max_to_show, printer=_CSL.print)
+
         # ── 导出 xlsx ──
-        _export_to_xlsx(to_file, [('板块聚合', df_stats)] +
-                        ([('个股详情', pd.DataFrame(stock_details))] if is_verbose else []))
+        sheets = [('板块聚合', df_stats)]
+        if is_verbose:
+            sheets.append(('个股详情', pd.DataFrame(stock_details)))
+        if per_stock:
+            for stock_code, stock_df in per_stock_dfs.items():
+                sc = SecurityCode(stock_code)
+                sheets.append((sc.short_code, stock_df))
+        _export_to_xlsx(to_file, sheets)
 
         # ── 管道返回 ──
-        if cache_blocks or _is_pipe_producer:
-            return {'blocks': list(block_2_infos.keys())}
+        result = {'stocks': set(stocks_list), 'blocks': list(block_2_infos.keys())}
+        if per_stock and per_stock_dfs:
+            result['dfs'] = per_stock_dfs
+        if cache_stocks or cache_blocks or _is_pipe_producer:
+            return result
 
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
