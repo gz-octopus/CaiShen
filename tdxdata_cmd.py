@@ -3943,57 +3943,85 @@ def save_to_file(_ctx: click.Context,
                   cache_stocks: bool,
                   stock_group_index: int,
                   **kwargs):
-    """将 stocks 保存到文件中（与 read_from_file 对应）
+    """保存 stocks / df / dfs 到文件（与 read_from_file 对应）
 
-    根据 --file 后缀名自动识别格式：.txt / .csv / .xlsx / .json。
+    根据 --file 后缀名自动识别格式：
+    - .xlsx: 所有数据同一文件，stocks→sheet「stocks」、df→sheet「df」、dfs 逐 key
+    - .txt/.csv/.json: 仅 stocks
+
+    管道模式下自动获取上游的 stocks / df / dfs。
     文件路径不含 / 或 \\ 时自动加上 output/ 前缀。
 
     使用示例：
-        gs -m 50 | sf -f all_a.txt                       # → output/all_a.txt
-        fl | sf -f D:/data/filtered.xlsx                  # → 绝对路径
-        sf -f result.json -k 'my_stocks'                 # → output/result.json
+        gs -m 50 | sf -f all_a.txt
+        ss -s 603358.SH -dl -tf daily_pnl | sf -f report.xlsx
     """
     _CSL = _ctx.obj['console']  # type: Console
 
     try:
-        stocks_list = list(stocks)
-        if not stocks_list:
-            _CSL.print("[red]未提供任何股票代码[/red]")
-            return
+        import os
+
+        # ── 收集数据：CLI stocks + 管道 pipe_data ──
+        pipe_data = _ctx.obj.get('_pipe_data', {})
+        stocks_list = list(stocks) if stocks else []
+        if pipe_data:
+            if not stocks_list:
+                stocks_list = list(pipe_data.get('stocks', set()))
+        pipe_df = pipe_data.get('df')  # single DataFrame
+        pipe_dfs = pipe_data.get('dfs', {})  # dict[str, DataFrame]
 
         # 无路径分隔符 → 自动加 output/ 前缀
-        import os
         if '/' not in file_path and '\\' not in file_path:
             os.makedirs('output', exist_ok=True)
             file_path = os.path.join('output', file_path)
 
-        # 后缀名 → 文件类型
         ext = os.path.splitext(file_path)[1].lower()
         if ext not in ('.txt', '.csv', '.xlsx', '.json'):
             _CSL.print(f"[red]不支持的文件后缀: {ext}（支持 .txt / .csv / .xlsx / .json）[/red]")
             return
 
-        if ext == '.txt':
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(stocks_list))
-        elif ext == '.csv':
-            import csv
-            with open(file_path, 'w', encoding='utf-8', newline='') as f:
-                writer = csv.writer(f)
-                for s in stocks_list:
-                    writer.writerow([s])
-        elif ext == '.xlsx':
+        # ── xlsx: 所有数据同一文件 ──
+        if ext == '.xlsx':
             import pandas as pd
-            df = pd.DataFrame({key: stocks_list})
-            df.to_excel(file_path, index=False)
-        elif ext == '.json':
-            import json
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump({key: stocks_list}, f, ensure_ascii=False, indent=2)
+            sheets = []
+            if stocks_list:
+                sheets.append(('stocks', pd.DataFrame({key: stocks_list})))
+            if pipe_df is not None and isinstance(pipe_df, pd.DataFrame) and not pipe_df.empty:
+                sheets.append(('df', pipe_df))
+            if pipe_dfs:
+                for k, v in pipe_dfs.items():
+                    if isinstance(v, pd.DataFrame) and not v.empty:
+                        safe = str(k)[:31]
+                        sheets.append((safe, v))
+            if not sheets:
+                _CSL.print("[red]无数据可保存（stocks/df/dfs 均为空）[/red]")
+                return
+            with pd.ExcelWriter(file_path, engine='openpyxl') as w:
+                for sheet_name, s_df in sheets:
+                    s_df.to_excel(w, sheet_name=sheet_name, index=False)
+            parts = [f"{s[0]}:{len(s[1])}行" for s in sheets]
+            _CSL.print(f"✅ 已保存到 [yellow]{file_path}[/yellow]（{'，'.join(parts)}）")
+        elif stocks_list:
+            # ── 非 xlsx: 仅 stocks ──
+            if ext == '.txt':
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(stocks_list))
+            elif ext == '.csv':
+                import csv
+                with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                    writer = csv.writer(f)
+                    for s in stocks_list:
+                        writer.writerow([s])
+            elif ext == '.json':
+                import json
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump({key: stocks_list}, f, ensure_ascii=False, indent=2)
+            _CSL.print(f"✅ 已保存 [green]{len(stocks_list)}[/green] 只股票到 [yellow]{file_path}[/yellow]")
+        else:
+            _CSL.print("[red]无数据可保存（stocks/df/dfs 均为空）[/red]")
+            return
 
-        _CSL.print(f"✅ 已保存 [green]{len(stocks_list)}[/green] 只股票到 [yellow]{file_path}[/yellow]")
-
-        if cache_stocks:
+        if cache_stocks and stocks_list:
             return {'stocks': stocks_list}
 
     except Exception as e:
