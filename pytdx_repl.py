@@ -11,7 +11,9 @@ import traceback
 from difoss_stock_util.color_log_util import *
 from difoss_stock_util.click_util import *
 from difoss_stock_util import SecurityCode, SecurityType, MarketType, read_yaml_config
-from rich import console
+from difoss_stock_util.rich_util import *
+from difoss_stock_util.util import print_locals
+from rich.console import Console
 
 from rich import print
 import pandas as pd
@@ -19,9 +21,16 @@ import pandas as pd
 import sys
 import click
 from typing import List, Dict, Optional
-from pytdx.util.best_ip import select_best_ip
+from pytdx.util.best_ip import select_best_ip, ping as pytdx_ping
 from simple_pytdx.api import Api
 from enum import IntEnum, StrEnum, Enum
+import datetime
+
+from cache_cmd import (
+    STOCKS,
+    stocks_collector, blocks_collector, df_collector,
+    memory_cache, data_frame, blocks_2_stocks,
+)
 
 # ---------------------------------------------------------------------------------------------------
 ALL_MARKET_LIST = ['SH', 'SZ']
@@ -29,13 +38,16 @@ ALL_SECURITY_TYPE_LIST = SecurityType.allows()
 ALL_SECURITY_TYPE_CN_LIST = SecurityType.allows_cn()
 
 # 可使用 -ping 功能调用 select_best_ip() 获取最佳 IP:PORT
-IP = 'sztdx.gtjas.com'
-PORT = 7709
+STOCK_IP = 'sztdx.gtjas.com'
+FUTURE_IP = '112.74.214.43'
 
-CONSOLE = console.Console()
+STOCK_PORT = 7709
+FUTURE_PORT = 7727
+
+CONSOLE = Console()
 CFG = None
 # ---------------------------------------------------------------------------------------------------
-def get_market_enum(market_str: str) -> int:
+def get_market_enum(market_str: str) -> Enum | None:
     market_str = market_str.upper()
     if market_str == 'SZ':
         return Api.Market.SZ
@@ -46,7 +58,7 @@ def get_market_enum(market_str: str) -> int:
 
     return None
 
-def market_enum_to_str(market_enum: int) -> str:
+def market_enum_to_str(market_enum: Enum) -> str:
     if market_enum == Api.Market.SZ:
         return 'SZ'
     elif market_enum == Api.Market.SH:
@@ -55,167 +67,219 @@ def market_enum_to_str(market_enum: int) -> str:
         return 'BJ'
     return None
 
+
+def security_code_to_tuple(security_code: str | SecurityCode) -> Optional[tuple]:
+    """将股票代码转换为 (market_enum, code) 元组"""
+    try:
+        if isinstance(security_code, SecurityCode):
+            code = security_code
+        else:
+            code = SecurityCode(security_code)
+        market_enum = get_market_enum(code.market_code)
+        if market_enum is None:
+            E(f"无法识别市场: {code.market_code}，股票代码: {security_code}")
+            return None
+        return (market_enum.value, code.short_code)
+    except Exception as e:
+        E(f"无法解析股票代码: {security_code}, 错误: {e}")
+        return None
+
+# ---------------------------------------------------------------------------------------------------
+@command_with_abbrev(abbrev='ip', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--type', '-t', 'src_type', type=click.Choice(['stock', 'future']), default='stock', help='选择数据源类型')
+@click.option('--check', '-c', 'is_check', is_flag=True, help='只检测配置文件中的 IP 的连通性')
+@click.pass_context
+def ping(_ctx: click.Context,
+         src_type: str,
+         is_check: bool,
+):
+    """检测服务器连通性"""
+    global CFG, CONSOLE
+    try:
+        best_ip = None
+        best_port = 0
+
+        if is_check:
+            tdx_cfg = CFG.get('pytdx', {}) # type: dict
+            addresses = []
+
+            if src_type == 'stock':
+                addresses = tdx_cfg.get('stock_addresses', []) # type: list[str]
+            else:
+                addresses = tdx_cfg.get('future_addresses', []) # type: list[str]
+
+            fast_delay = datetime.timedelta(seconds=10)
+
+            for addr in addresses:
+                ip, port = addr.split(':') if ':' in addr else (addr, 7709)
+                port = int(port)
+                delay_dt = pytdx_ping(ip=ip, port=port, type_=src_type)
+                ok = delay_dt < datetime.timedelta(0, 9, 0) if delay_dt else False
+                CONSOLE.print(f"{'✅' if ok else '❌'} ping(ip={ip}, port={port}), 延时： {delay_dt}")
+                if ok:
+                    if delay_dt < fast_delay:
+                        best_addr = ip
+        else:
+            best_addr = select_best_ip(src_type)
+            if best_addr:
+                best_ip = best_addr.get('ip')
+                best_port = best_addr.get('port')
+
+        if best_ip and best_port:
+            CONSOLE.print(f"把 IP 设置为最优IP: {best_ip}:{best_port}")
+
+            _ctx.obj[f'{src_type}_best_ip'] = best_ip
+            _ctx.obj[f'{src_type}_best_port'] = best_port
+
+
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+@click.command(context_settings=dict(help_option_names=['-?', '--help', '-h']))
+@click.option('-s', '--stock', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS, help='股票代码列表 (如: 000001.SZ)')
+@click.option('--start', '-st', 'start_date', type=DATETIME, default='20260101', show_default=True, help='起始日期 YYYYMMDD')
+@click.option('--end', '-et', 'end_date', type=DATETIME, default=datetime.datetime.now(), show_default=True, help='结束日期 YYYYMMDD，默认今天')
+@click.pass_context
+def get_k_data(_ctx: click.Context, stocks: list[str],
+               start_date: str, end_date: str,
+               ):
+    """获取K线（日k）数据"""
+    global CFG, CONSOLE
+    start_date_str = start_date.strftime('%Y-%m-%d') if (start_date and isinstance(start_date, datetime.datetime)) else ''
+    end_date_str = end_date.strftime('%Y-%m-%d') if (end_date and isinstance(end_date, datetime.datetime)) else ''
+    
+    print_locals()
+
+    hq_api = _ctx.obj.get('hq_api', None) # type: TdxHq_API
+    if not hq_api:
+        E("行情API未初始化，请先连接服务器")
+        return
+    try:
+        for stock in stocks:
+            code = SecurityCode(stock)
+            market_enum = get_market_enum(code.market_code)
+            k_lines = hq_api.get_k_data(code=code.short_code, start_date=start_date_str, end_date=end_date_str)
+            if isinstance(k_lines, pd.DataFrame):
+                df = k_lines
+            else:
+                df = hq_api.to_df(k_lines)
+            print_dataframe(df, title=f"{stock} 日K线数据")
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
+@click.command(context_settings=dict(help_option_names=['-?', '--help', '-h']))
+@click.pass_context
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS, help='股票代码列表 (如: 000001.SZ)')
+def get_security_quotes(
+    _ctx: click.Context,
+    stocks: list[str]
+    ):
+    """获取五档行情"""
+    global CFG, CONSOLE
+    hq_api = _ctx.obj.get('hq_api', None) # type: TdxHq_API
+    try:
+        code_tuples = [security_code_to_tuple(stock) for stock in stocks]
+        print_locals()
+        quotes = hq_api.get_security_quotes(code_tuples)
+        df = hq_api.to_df(quotes)
+        df = df.loc[:, (df != 0).any(axis=0)] # 删除 df 中 value 全部是 0 的列
+        print_dataframe(df, title="五档行情数据")
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+
+
 # ---------------------------------------------------------------------------------------------------
 @click.command(context_settings=dict(help_option_names=['-?', '--help', '-h']))
-@click.argument('stocks', nargs=-1, callback=split_comma, required=False)
-@click.option('-p', '--ping', is_flag=True, help="寻找最快的通达信服务器")
-@click.option('-c', '--count', type=int, default=10, help='查找多少条k线')
-@click.option('-v', '--verbose', is_flag=True, help='详细模式')
-@click.option('-l', '--limit', default=10, show_default=True, help='个数限制')
 @click.option('-m', '--market', 'markets', multiple=True, callback=split_comma, help='市场')
 @click.option('-a', '--all', 'all_markets', is_flag=True, help='查询所有市场')
 @click.option('-t', '--security-type', 'security_types', multiple=True, callback=split_comma, help='股票类型')
-@click.option('-s', '--start', 'starts', multiple=True, callback=split_comma, help='股票代码开头')
-@click.option('-cqcx', '-xdxr', 'is_cqcx', is_flag=True, help='查询除权除息')
-def main(
-    stocks: list[str],
-    ping: bool,
-    count: int,
-    verbose: bool,
-    limit: int,
+@click.pass_context
+def get_security_list(
+    _ctx: click.Context,
     markets: list[str],
     all_markets: bool,
     security_types: list[str],
-    starts: list[str],
-    is_cqcx: bool
 ):
+    """获取股票列表"""
+    global CFG, CONSOLE
+    hq_api = _ctx.obj.get('hq_api', None) # type: TdxHq_API
+    try:
+        if all_markets or "ALL" in markets:
+            markets = ALL_MARKET_LIST
 
-    I(**{k:v for k,v in locals().items() if v}, _level='PARAMETER')
+        if not security_types:
+            security_types = [SecurityType.STOCK]
 
-    # 预处理参数 ----------------------------------------------------------------------------------
-    if all_markets or "ALL" in markets:
-        markets = ALL_MARKET_LIST
+        for market in markets:
+            market_int = get_market_enum(market).value
+            stock_list = hq_api.get_security_list(market_int)
+            df = hq_api.to_df(stock_list)
+            print_dataframe(df, title=f"{market} 股票列表")
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
+        
 
-    # 股票代码不足 6位，归入 starts
-    for stock in stocks:
-        if len(stock) < 6:
-            starts.append(stock)
-            stocks.remove(stock)
-
-    # 默认只显示股票
-    if not security_types:
-        security_types = [SecurityType.STOCK]
-
-    # 支持中文名称作为参数
-    st_list = []
-    for st in security_types:
-        if st in ALL_SECURITY_TYPE_LIST:
-            st_list.append(SecurityType(st))
-        elif st in ALL_SECURITY_TYPE_CN_LIST:
-            st_list.append(SecurityType(SecurityType.chinese_name_2_en(st)))
-    security_types.extend(st_list) # type: List[SecurityType]
-
-    I("预处理后的参数：", **{k:v for k,v in locals().items() if v}, _level='PARAMETER')
-
-    if ping:
-        best_ip_port = select_best_ip()
-        if best_ip_port and isinstance(best_ip_port, dict):
-            I("最快的通达信服务器是：", ip=best_ip_port.get('ip'), port=best_ip_port.get('port'))
-        else:
-            E("无法连接通达信所有服务器，请检查网络")
+@command_with_abbrev(abbrev='cqcx', context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS, help='股票代码列表 (如: 000001.SZ)')
+@click.pass_context
+def get_xdxr_info(
+    _ctx: click.Context,
+    stocks: list[str]
+):
+    """获取除权除息信息"""
+    global CFG, CONSOLE
+    hq_api = _ctx.obj.get('hq_api', None) # type: TdxHq_API
+    if not hq_api:
+        E("行情API未初始化，请先连接服务器")
         return
-
-
-    with Api((IP, PORT)) as api:
-
-        # 用于记录所有股票详情
-        all_stock_records: List[Dict] = []
-
-        # for m in markets:
-        #     mt = MarketType(m)
-        #     market_enum = Api.Market(mt.int)
-        #     I(m=m, mt=mt, int=mt.int, market_enum=market_enum)
-        #     stock_count = api.get_stocks_count(market_enum)
-        #     market_str = MarketType(market_enum).str
-        #     # market_str = MarketType.from_int(market_enum.value).str
-        #     I(market=market_str, get_stocks_count=stock_count, _level="RESULT")
-        # exit(1)
-
-        for market in markets:  # e.g., [Api.Market.SH, Api.Market.SZ]
-            mt = MarketType(market)
-            market_enum = Api.Market(mt.int)
-            market_str = mt.str
-            stock_count = api.get_stocks_count(market_enum)
-            I(market=market_str, get_stocks_count=stock_count, _level="RESULT")
-
-            batch_i = 0
-            done = 0
-
-            while done < stock_count:
-
-                stock_list: List[dict] = api.get_stocks_list(market_enum, done)
-                # I(f"第 {batch_i + 1} 批：", len_stock_list=len(stock_list), _level="RESULT")
-                done += len(stock_list)
-                batch_i += 1
-
-                for stock_detail in stock_list:
-                    code = SecurityCode(stock_detail['股票代码'], market_str)
-
-                    # 确定类型
-                    sec_type = code.security_type
-                    if sec_type is None:
-                        E("无法识别: ", **stock_detail, market={market_str})
-                        continue
-
-                    if sec_type not in security_types:
-                        continue
-
-                    # 添加“类型”字段
-                    stock_detail['类型'] = sec_type.chinese_name
-                    stock_detail['市场'] = market_str  # 可选：显式记录市场
-
-                    # 删除不理解的字段
-                    stock_detail.pop('reserved_bytes1')
-                    stock_detail.pop('reserved_bytes2')
-
-                    # 保存整条记录
-                    all_stock_records.append(stock_detail)
-
-        # 转为 DataFrame
-        df = pd.DataFrame(all_stock_records)
-
-        if not df.empty:
-            # 打印每个市场的类型分布
-            for market in df['市场'].unique():
-                market_df = df[df['市场'] == market]
-                type_counts = market_df['类型'].value_counts().to_dict()
-                print(f"市场: {market}", type_counts)
-
-            # 打印 df中 股票代码 列以 {starts} 开头的股票信息（如：92、83、00、60 等）
-            if starts:
-                df = df[df['股票代码'].str.startswith(tuple(starts))]
-
-            print(f"获取到 {len(df)} 条股票信息: {df}")
-        else:
-            print("未获取到任何股票信息")
-
-
-        for short_code in stocks:
-            code = SecurityCode(short_code)
+    try:
+        for stock in stocks:
+            code = SecurityCode(stock)
             market = get_market_enum(code.market_code)
-            D(f"get_k_line()", code=code)
-            for k in api.get_k_line(Api.KLineCategory.KDay, market, short_code, 0, count):
-                T(**k, _level="RESULT")
+            data = hq_api.get_xdxr_info(market, code.short_code)
+            print(f"股票 {stock} 的除权除息信息（共 {len(data) if data else 0} 条）：")
+            for i, datum in enumerate(data):
+                if i == 0:
+                    I(type=type(datum))
+                CONSOLE.print(datum)
+            print()
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
 
-            # BUG: 此函数有bug，请按照 pytdx 项目修复
-            # 但 pytdx 已经出现了 GetSecurityQuotesCmd 的抽象类，
-            # 对比起来， simple_pytdx 还是沿用逐个装包解包的方式，显然很落后。
-            # TODO: 后续可以把 simple_pytdx 中 api 相关的枚举和有用的方法迁移到 pytdx 中。
-            # D(f"get_stock_quotes()", code=code)
-            # for k in api.get_stock_quotes([(market, short_code)]):
-            #     T(**k, _level="RESULT")
 
-            print("获取财务信息:", api.get_finance_info(market, short_code))
+@click.command(context_settings=dict(help_option_names=['-?', '--help', '-h']))
+@click.option('--type', '-t', 'src_type', type=click.Choice(['stock', 'future']), default='stock', help='选择数据源类型')
+@click.option('--ip', '-i', 'ip', help='IP')
+@click.option('--port', '-p', 'port', type=int, help='端口')
+@click.pass_context
+def connect(_ctx: click.Context,
+    src_type: str,
+    ip: str,
+    port: int,
+    ):
+    """连接服务器"""
+    global CONSOLE, STOCK_IP, STOCK_PORT
 
-            if is_cqcx:
-                for data in api.get_xdxr_info(market, short_code):
-                    # T(**data)
-                    print(data['日期'], data['类型'], end=' ')
-                    del data['日期']
-                    del data['类型']
-                    for k, v in data.items():
-                        print(f'{k}: {v}, ', end='')
-                print()
+    _ctx.ensure_object(dict)
+
+    if src_type == 'stock':
+        ip = ip or _ctx.obj.get(f'{src_type}_best_ip', STOCK_IP)
+        port = port or _ctx.obj.get(f'{src_type}_best_port', STOCK_PORT)
+        hq_api = TdxHq_API()
+        if hq_api.connect(ip=ip, port=port):
+            CONSOLE.print(f'连接股票服务器失败：ip={ip}')
+            return
+        _ctx.obj['hq_api'] = hq_api
+    else:
+        ip = ip or _ctx.obj.get(f'{src_type}_best_ip', FUTURE_IP)
+        port = port or _ctx.obj.get(f'{src_type}_best_port', FUTURE_PORT)
+        ex_hq_api = TdxExHq_API()
+        if ex_hq_api.connect(ip=ip, port=port):
+            CONSOLE.print(f'连接扩展服务器失败：ip={ip}')
+            return
+        _ctx.obj['ex_hq_api'] = ex_hq_api
 
 
 # --------------------------------------------------------------------------------
@@ -223,7 +287,7 @@ def main(
 # ======================
 # 初始化
 def init(_ctx: click.Context):
-    global CFG, CONSOLE
+    global CFG, CONSOLE, STOCK_IP, STOCK_PORT
 
     _ctx.ensure_object(dict)
     _ctx.obj['console'] = CONSOLE
@@ -234,7 +298,11 @@ def init(_ctx: click.Context):
     try:
         # xtdata.enable_hello = False
         # tq.initialize(__file__)
-        click.echo("✅ 初始化成功")
+        hq_api = TdxHq_API(multithread=True)
+        hq_api.connect(ip=STOCK_IP, port=STOCK_PORT)
+        _ctx.obj['hq_api'] = hq_api
+        
+        click.echo("✅ 行情API初始化成功")
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
 

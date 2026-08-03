@@ -12,17 +12,16 @@ from difoss_stock_util import *
 from difoss_stock_util.color_log_util import *
 
 
-
 from mootdx.quotes import Quotes, StdQuotes, ExtQuotes
 from mootdx.utils import FREQUENCY, get_frequency
 from mootdx.reader import Reader, StdReader
 
 # 旧版本的 pytdx
 from pytdx.exhq import TdxExHq_API
-from pytdx.util.best_ip import select_best_ip
 
 from cache_cmd import cache_stock_name, get_stock_name, STOCKS
 from cache_cmd import memory_cache  # 引入 mc 命令
+from pytdx_repl import ping # 引入 ip 命令
 
 # --------------------------------------------------------------------------------
 # Global Variables
@@ -57,21 +56,6 @@ def _example(_ctx: click.Context,
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
 
-
-@command_with_abbrev(abbrev='ip', context_settings={'help_option_names': ['-?', '--help', '-h']})
-@click.option('--type', '-t', 'type', type=click.Choice(['stock', 'future']), default='stock', help='选择数据源类型')
-@click.pass_context
-def best_ip(_ctx: click.Context,
-            type: str,
-):
-    """获取最佳IP地址"""
-    _CSL = _ctx.obj['console'] # type: Console
-    try:
-        # 旧版本的 pytdx 内置的 ip 列表，可能不太准确了，后续可以考虑更新一下
-        ip = select_best_ip(type)
-        _CSL.print(f"最佳IP: {ip}")
-    except Exception as e:
-        _CSL.print_exception(extra_lines=5, show_locals=True)
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=['MHI2604'], required=True, help='股票代码列表 (如: 688318.SH)')

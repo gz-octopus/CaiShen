@@ -473,20 +473,6 @@ def get_market_data(_ctx: click.Context,
         _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
-
-@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
-@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, required=True,
-            help='股票代码列表 (如: 688318.SH 或 688318)，支持半角逗号分隔')
-@click.pass_context
-def test(_ctx: click.Context,
-    stocks: list[str],
-):
-    """获取合约基本信息（不校验证券代码，请自定带上市场代码）"""
-    print_locals()
-
-    _CSL = _ctx.obj['console'] # type: Console
-
-
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, required=True,
             help='股票代码列表 (如: 688318.SH 或 688318)，支持半角逗号分隔')
@@ -700,8 +686,9 @@ def get_l2_quote(_ctx: click.Context,
     print_locals(printer=_CSL.print)
 
     try:
-        res = xtdata.get_l2_order(field_list=fields, stock_code=stocks, start_time=start_time, end_time=end_time, count=count)
-        _CSL.print(f"get_l2_order: {res}")
+        for stock in stocks:
+            res = xtdata.get_l2_order(field_list=fields, stock_code=stock, start_time=start_time, end_time=end_time, count=count)
+            _CSL.print(f"get_l2_order: {res}")
 
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
@@ -729,13 +716,115 @@ def _example(_ctx: click.Context,
     """"""
     _CSL = _ctx.obj['console'] # type: Console
     try:
-        for full_code in stock:
+        for full_code in stocks:
             # TODO:
             _CSL.print(f"{full_code} :", )
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, help='股票代码列表 (如: 688318.SH)')
+@click.pass_context
+def info(_ctx: click.Context,
+    stocks: list[str]
+):
+    """信息"""
+    _CSL = _ctx.obj['console'] # type: Console
+    try:
+        _CSL.print('data_dir:', xtdata.data_dir)
+    except Exception as e:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+# =========================================================================================
+# 实时行情（通过订阅）
+
+def on_data(data):
+    global CONSOLE
+    for stock_code in data:
+        CONSOLE.print(f"data[{stock_code}]: {data[stock_code]}")
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, required=True, help='股票代码列表 (如: 688318.SH)')
+@click.option('--run', '-r', 'run', is_flag=True, help='是否阻塞')
+@click.pass_context
+def subscribe_whole_quote(_ctx: click.Context,
+    stocks: list[str],
+    run: bool,
+):
+    """订阅全推行情
+    - 订阅全推行情数据，返回订阅号
+    - 数据推送从callback返回，数据类型为分笔数据
+    """
+    _CSL = _ctx.obj['console'] # type: Console
+    try:
+        xtdata.subscribe_whole_quote(code_list=stocks, callback=on_data)
+        
+        if run:
+            seq_subscribed = xtdata.run() # 阻塞当前线程来维持运行状态，一般用于订阅数据后维持运行状态持续处理回调
+            _CSL.print(f"订阅的标的为：{seq_subscribed}")
+        
+    except Exception as e:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, required=True, help='股票代码列表 (如: 688318.SH)')
+@click.option('--start-time', '-st', 'start_time', type=DATETIME, default=None, help='开始时间')
+@click.option('--end-time', '-et', 'end_time', type=DATETIME, default=None, help='结束时间')
+@click.option('--period', '-p', default='1d', help='K线周期',
+              type=click.Choice(ALL_PERIODS))
+@click.option('--run', '-r', 'run', is_flag=True, help='是否阻塞')
+@click.pass_context
+def subscribe_quote(_ctx: click.Context,
+    stocks: list[str],
+    start_time: datetime | None,
+    end_time: datetime | None,
+    period: str,
+    run: bool,
+):
+    """订阅单股行情"""
+    _CSL = _ctx.obj['console'] # type: Console
+    try:
+        for stock in stocks:
+            params = dict(
+                stock_code=stock,
+                period=period,
+                callback=on_data,
+                count=0,
+            )
+            if start_time:
+                params['start_time'] = start_time or ''
+            if end_time:
+                params['end_time'] = end_time or ''
+                
+            xtdata.subscribe_quote(**params)
+            
+            if run:
+                seq_subscribed = xtdata.run() # 阻塞当前线程来维持运行状态，一般用于订阅数据后维持运行状态持续处理回调
+                _CSL.print(f"订阅的标的为：{seq_subscribed}")
+        
+    except Exception as e:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, required=True, default=STOCKS, help='股票代码列表 (如: 688318.SH)')
+@click.pass_context
+def unsubscribe_quote(_ctx: click.Context,
+    stocks: list[str]
+):
+    """反订阅"""
+    _CSL = _ctx.obj['console'] # type: Console
+    try:
+        res = xtdata.unsubscribe_quote(stocks)
+        _CSL.print(f"res: {res}")
+    except Exception as e:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
+    
+    
 # ======================
 # 初始化
 # ======================

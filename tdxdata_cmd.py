@@ -439,7 +439,7 @@ def refresh_cache(_ctx: click.Context):
 
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
-@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, required=True, help='股票代码列表 (如: 688318.SH)')
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS, help='股票代码列表 (如: 688318.SH)')
 @click.option('--period', '-p', default='1d', type=click.Choice(ALL_PERIODS), show_default=True, help='K线周期')
 @click.pass_context
 def refresh_kline(_ctx: click.Context, stocks: list[str], period: str):
@@ -2006,7 +2006,9 @@ def _export_to_xlsx(filename: str | None, sheets: list[tuple[str, pd.DataFrame]]
         return
     import os
     os.makedirs('output', exist_ok=True)
-    path = os.path.join('output', f"{filename}.xlsx")
+    if not filename.endswith('.xlsx'):
+        filename = filename + '.xlsx'
+    path = os.path.join('output', filename)
     with pd.ExcelWriter(path, engine='openpyxl') as w:
         for sheet_name, df in sheets:
             safe = sheet_name[:31]  # Excel sheet name limit
@@ -3178,6 +3180,8 @@ def get_trading_dates(
               help='需要从输出中包含的指标列名的正则表达式（可多选）')
 @click.option('--jump-tdx', '-j', 'jump_tdx', type=float, default=None,
               help='跳转通达信界面并等待指定秒数（以获得L2指标数据），不指定时不跳转')
+@click.option('--start-time', '-st', 'start_time', type=DATETIME, help='过滤返回数据的开始时间（含）')
+@click.option('--end-time', '-et', 'end_time', type=DATETIME, help='过滤返回数据的结束时间（含）')
 @click.option('--save-db/--no-save-db', '-sdb', 'is_save_db', is_flag=True,
               help='每获取完一只股票立即入库（边跑边存），无需通过 | db 管道')
 @click.option('--replace', '-r', 'is_replace', is_flag=True,
@@ -3203,6 +3207,8 @@ def formula(
     field_inclusions: list[str],
     field_regex_inclusions: list[str],
     jump_tdx: float | None,
+    start_time: datetime | None,
+    end_time: datetime | None,
     is_save_db: bool,
     is_replace: bool,
     is_with_name: bool,
@@ -3291,8 +3297,10 @@ def formula(
 
         # 准备工作：预先计算 DB URL（供 -sdb 边跑边存用）
         _db_url = _assemble_db_url(DB_TYPE, _CFG) if is_save_db else None
+        _db_session = None  # 复用 session
         if _db_url:
             StockMetrics.init_db(_db_url)
+            _db_session = StockMetrics.open_batch_session(_db_url)
 
         for stock_idx, full_code in enumerate_with_progress(stocks, task_name="逐个股票调用公式", console=_CSL):
             # NOTICE: 通达信缺陷：L2 数据需要软件先跳转（触发界面拉取后）才能获取，不然全是 0 值
@@ -3306,7 +3314,7 @@ def formula(
             if isinstance(formula_set_res, dict):
                 if int(formula_set_res.get('ErrorId', '-1')) != 0:
                     _CSL.print(f"[ERROR] formula_set_res(): {formula_set_res}")
-                    break
+                    next # 错误发生后，继续下面的，防止退出
 
             # 调用公式 API（类型分发）
             if _is_zb:
@@ -3370,6 +3378,12 @@ def formula(
                 valid_cnt = min(cnt_of_res, len(trading_dates))
                 df = pd.DataFrame(value_of_res, index=pd.to_datetime(trading_dates[-cnt_of_res:]))
 
+                # ── 按起止时间过滤 ──
+                if start_time is not None:
+                    df = df[df.index >= pd.Timestamp(start_time)]
+                if end_time is not None:
+                    df = df[df.index <= pd.Timestamp(end_time)]
+
                 # 过滤掉"有效数据出现之前的无效行"
                 is_invalid_row = (df.isna()) | (df == 0) | (df == '')
                 valid_mask = is_invalid_row.all(axis=1).cumprod().astype(bool)
@@ -3404,9 +3418,9 @@ def formula(
 
                     # 落盘当前股票（在页面加载期间进行）
                     if is_save_db and _is_zb and not df_cleaned.empty:
-                        StockMetrics.bulk_upsert_from_dfs(
-                            {full_code: df_cleaned}, formula_key, period,
-                            dividend_type, _db_url, replace=is_replace, console=_CSL)
+                        StockMetrics.batch_upsert_one_stock(
+                            _db_session, full_code, df_cleaned, formula_key,
+                            period, dividend_type, replace=is_replace, console=_CSL)
 
                     # 若落盘耗时 < jump_tdx，补足剩余等待时间
                     if _t0 is not None:
@@ -3416,11 +3430,15 @@ def formula(
                 else:
                     # 最后一只股票：直接落盘
                     if is_save_db and _is_zb and not df_cleaned.empty:
-                        StockMetrics.bulk_upsert_from_dfs(
-                            {full_code: df_cleaned}, formula_key, period,
-                            dividend_type, _db_url, replace=is_replace, console=_CSL)
+                        StockMetrics.batch_upsert_one_stock(
+                            _db_session, full_code, df_cleaned, formula_key,
+                            period, dividend_type, replace=is_replace, console=_CSL)
 
         # ── 阶段4: 结果输出（类型分发） ──
+        # 关闭复用 session
+        if _db_session is not None:
+            _db_session.close()
+
         if verbose and code_2_value is not None:
             _CSL.print(f"code_2_value = {code_2_value}")
 
@@ -3722,14 +3740,18 @@ def formula_multi(
                 for stock_code, stock_df in stock_dfs.items():
                     print_dataframe(stock_df, title=f"{stock_code}|{get_stock_name(stock_code,'')} 在 [yellow]{name}[/yellow] 指标的值", sum_cols=sum_columns, printer=_CSL.print)
 
-                    # 边跑边存：每只股票立即入库
+                    # 边跑边存：每只股票立即入库（复用 session）
                     if is_save_db and formula_type == 'zb' and not stock_df.empty:
                         formula_key = f"{name}|{','.join(args)}" if args else name
                         db_url = _assemble_db_url(DB_TYPE, _CFG)
                         StockMetrics.init_db(db_url)
-                        StockMetrics.bulk_upsert_from_dfs(
-                            {stock_code: stock_df}, formula_key, period,
-                            dividend_type, db_url, console=_CSL)
+                        _m_session = StockMetrics.open_batch_session(db_url)
+                        try:
+                            StockMetrics.batch_upsert_one_stock(
+                                _m_session, stock_code, stock_df, formula_key,
+                                period, dividend_type, console=_CSL)
+                        finally:
+                            _m_session.close()
 
                 if cache_df:
                     formula_key = f"{name}|{','.join(args)}" if args else name
