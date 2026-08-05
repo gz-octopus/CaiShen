@@ -2357,6 +2357,9 @@ def filter_capital_flow(_ctx: click.Context,
 
     # 是否为实时日期（当日或最近交易日 ≈ 当前）
     is_realtime = (trading_date_str == today_str)
+    
+    if is_verbose:
+        is_with_name = True
 
     try:
         stocks_list = list(stocks)
@@ -2448,12 +2451,15 @@ def filter_capital_flow(_ctx: click.Context,
 
         # 打印通过筛选的股票列表
         if passed_stocks:
-            _CSL.print(f"符合条件个股: ", end='')
             if is_with_name:
                 stocks_to_show = [f"{sc}|{get_stock_name(sc)}" for sc in list(passed_stocks)]
             else:
                 stocks_to_show = list(passed_stocks)
-            _CSL.print(Pretty(stocks_to_show, max_length=max_to_show))
+            
+            result = [{'stock.count': len(stocks_to_show) , 'stock.matched': stocks_to_show}]
+            print_dataframe(pd.DataFrame(result), title='符合条件个股')
+            # _CSL.print(f"符合条件个股: ", end='')
+            # _CSL.print(Pretty(stocks_to_show, max_length=max_to_show))
 
         # ── 管道返回 ──
         if cache_stocks or _is_pipe_producer:
@@ -3627,7 +3633,7 @@ def formula_multi(
                         stocks = getattr(row, 'Stocks', [])
 
                     if date and stocks:
-                        args_str = f"_{'_'.join(formula_arg)}" if formula_arg else ""
+                        args_str = f"_{'_'.join(args)}" if args else ""
                         usr_block_name = f"{name}{args_str}.{date}"
 
                         if is_save_user_sector:
