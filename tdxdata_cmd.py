@@ -45,6 +45,7 @@ from tdx_quant_util import *
 from sqlalchemy import text, create_engine
 from sqlalchemy.orm import Session
 from time import sleep, time
+from decimal import Decimal, ROUND_HALF_UP
 
 from cache_cmd import (STOCKS,
                        stocks_collector, blocks_collector, df_collector,
@@ -1092,6 +1093,302 @@ def get_divide_factors(_ctx: click.Context,
         _CSL.print_exception(extra_lines=5, show_locals=True)
 
 
+# ---------------------------------------------------------------------------------------------
+# 获取日线统计数据接口（get_exday_data）
+#
+# get_exday_data 返回原始格式:
+#   Amo[4][4] — 金额矩阵:  [超大, 大, 中, 小] x [买入, 卖出, 主买, 主卖] （万元）
+#   Vol[4][4] — 成交量矩阵: [超大, 大, 中, 小] x [买入, 卖出, 主买, 主卖]（手）
+#   VolNum[2][2] — 成交笔数矩阵: [大超单, 中小单] x [买单, 卖单]
+#
+# 拼装目标: {"L2_DATA": {"主买净额": ..., "主力净额": ..., ...}}
+
+_EXDAY_AMO_LABELS = [
+    # (源坐标, 目标 key)
+    ((0, 0), '买入_超_万'), ((0, 1), '卖出_超_万'), ((0, 2), '主买_超_万'), ((0, 3), '主卖_超_万'),
+    ((1, 0), '买入_大_万'), ((1, 1), '卖出_大_万'), ((1, 2), '主买_大_万'), ((1, 3), '主卖_大_万'),
+    ((2, 0), '买入_中_万'), ((2, 1), '卖出_中_万'), ((2, 2), '主买_中_万'), ((2, 3), '主卖_中_万'),
+    ((3, 0), '买入_小_万'), ((3, 1), '卖出_小_万'), ((3, 2), '主买_小_万'), ((3, 3), '主卖_小_万'),
+]
+
+_EXDAY_VOL_LABELS = [
+    # (源坐标, 目标 key)
+    ((0, 0), '买入量_超'), ((0, 1), '卖出量_超'), ((0, 2), '主买量_超'), ((0, 3), '主卖量_超'),
+    ((1, 0), '买入量_大'), ((1, 1), '卖出量_大'), ((1, 2), '主买量_大'), ((1, 3), '主卖量_大'),
+    ((2, 0), '买入量_中'), ((2, 1), '卖出量_中'), ((2, 2), '主买量_中'), ((2, 3), '主卖量_中'),
+    ((3, 0), '买入量_小'), ((3, 1), '卖出量_小'), ((3, 2), '主买量_小'), ((3, 3), '主卖量_小'),
+]
+
+_EXDAY_VOLNUM_LABELS = [
+    # (源坐标, 目标 key)
+    ((0, 0), '大超买单数'), ((0, 1), '大超卖单数'),
+    ((1, 0), '中小买单数'),  ((1, 1), '中小卖单数'),
+]
+
+
+def _trans_exday_to_l2_metrics(record: dict) -> dict:
+    """将 get_exday_data 单条原始记录转换为 stock_metrics 的 L2_DATA JSONB 格式
+    """
+    metrics = {}
+
+    amo = record.get('Amo', [])
+    for (ri, ci), key in _EXDAY_AMO_LABELS:
+        try:
+            metrics[key] = float(amo[ri][ci]) / 10000.0
+        except (IndexError, TypeError, ValueError):
+            metrics[key] = 0.0
+
+    vol = record.get('Vol', [])
+    for (ri, ci), key in _EXDAY_VOL_LABELS:
+        try:
+            metrics[key] = float(vol[ri][ci])
+        except (IndexError, TypeError, ValueError):
+            metrics[key] = 0.0
+
+    # 成交笔数
+    vol_num = record.get('VolNum', [])
+    for (ri, ci), key in _EXDAY_VOLNUM_LABELS:
+        try:
+            metrics[key] = float(vol_num[ri][ci])
+        except (IndexError, TypeError, ValueError):
+            metrics[key] = 0.0
+
+    return metrics
+
+
+def _parse_exday_date(date_val) -> str | None:
+    """解析 get_exday_data 返回的 Date 字段为 YYYYMMDD 字符串"""
+    if date_val is None:
+        return None
+    if isinstance(date_val, str):
+        return date_val
+    if isinstance(date_val, (int, float)):
+        date_str = str(int(date_val))
+        if len(date_str) == 8:
+            return date_str
+    return None
+
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
+              default=STOCKS, help='股票代码列表 (如: 688318.SH)')
+@click.option('--count', '-c', 'count', type=int, default=1, help='返回最近记录数量，默认 1')
+@click.option('--jump-tdx', '-j', 'jump_tdx', type=float, default=None,
+              help='跳转通达信并等待秒数后读取（触发 L2 数据拉取，可获得多日历史）')
+@click.pass_context
+def get_exday_data_raw(_ctx: click.Context, stocks: list[str], count: int,
+                        jump_tdx: float | None):
+    """"""  # (raw 接口仅供内部调试)
+    _CSL = _ctx.obj['console']  # type: Console
+    try:
+        for _, stock_code in enumerate(stocks):
+            if jump_tdx is not None:
+                tq.exec_to_tdx(url=f"http://www.treeid/code_{stock_code[:6]}")
+                sleep(jump_tdx)
+            raw = tq.get_exday_data(stock_code=stock_code, count=count)
+            _CSL.print(raw)
+    except Exception as e:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+def strict_round(x, xg_flag=2):
+    """
+    严格四舍五入（逢五进一），支持指定小数位数
+
+    Parameters:
+        x : int, float, str, Decimal - 待处理的数值
+        xg_flag : int - 保留的小数位数，默认2位。例如：
+            - xg_flag=0 → 保留整数
+            - xg_flag=2 → 保留两位小数
+            - xg_flag=-1 → 保留到十位（但通常不用负数，这里仅作说明）
+
+    Returns:
+        float - 四舍五入后的浮点数
+    """
+    # 1. 将输入转为字符串，避免浮点精度丢失
+    x_str = str(x) if not isinstance(x, Decimal) else str(x)
+
+    # 2. 根据位数生成 quantize 所需的 Decimal 精度对象
+    #    例如 xg_flag=2 → '0.01' ; xg_flag=0 → '1' ; xg_flag=1 → '0.1'
+    #    使用科学计数法 '1e-{n}' 可自动处理 n=0 的情况
+    quant = Decimal('1e-{}'.format(xg_flag))
+
+    # 3. 执行严格四舍五入
+    rounded = Decimal(x_str).quantize(quant, rounding=ROUND_HALF_UP)
+
+    # 4. 返回 float（如要保留 Decimal 精度可去掉 float()）
+    return float(rounded)
+
+
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@stocks_collector
+@df_collector
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks,
+              default=STOCKS, help='股票代码列表 (如: 688318.SH)')
+@click.option('--count', '-c', 'count', type=int, default=1, help='返回最近记录数量，默认 1')
+@click.option('--jump-tdx', '-j', 'jump_tdx', type=float, default=None,
+              help='跳转通达信并等待秒数后读取（触发 L2 数据拉取，可获得多日历史）')
+@click.option('--xsflag', '-x', 'xs_flag', type=int, default=0, help='数据精度（最大可返回8位小数。）')
+@click.option('--verbose', '-v', 'verbose', is_flag=True, help='详细模式')
+# 字段过滤
+@click.option('--field-exclusion', '-fe', 'field_exclusions', multiple=True, callback=split_comma,
+              help='需要从输出中剔除的指标列名（可多选）')
+@click.option('--field-regex-exclusion', '-fre', 'field_regex_exclusions', multiple=True, callback=split_comma,
+              help='需要从输出中剔除的指标列名的正则表达式（可多选）')
+@click.option('--field-inclusion', '-fi', 'field_inclusions', multiple=True, callback=split_comma,
+              help='需要从输出中包含的指标列名（可多选）')
+@click.option('--field-regex-inclusion', '-fri', 'field_regex_inclusions', multiple=True, callback=split_comma,
+              help='需要从输出中包含的指标列名的正则表达式（可多选）')
+# 入库
+@click.option('--save-db/--no-save-db', '-sdb', 'is_save_db', is_flag=True,
+              help='将拼装后的 L2_DATA 指标入库到 stock_metrics')
+@click.option('--replace', '-r', 'is_replace', is_flag=True,
+              help='入库时替换已有记录（默认 merge，仅与 -sdb 配合生效）')
+@click.pass_context
+def get_exday_data(_ctx: click.Context, stocks: list[str], count: int,
+                   jump_tdx: float | None,
+                   xs_flag: int,
+                   verbose: bool,
+                   field_exclusions: list[str], field_regex_exclusions: list[str],
+                   field_inclusions: list[str], field_regex_inclusions: list[str],
+                   is_save_db: bool, is_replace: bool,
+                   cache_stocks: bool, stock_group_index: int,
+                   cache_df: bool,
+                   **kwargs):
+    """获取指定股票的日线统计数据，拼装为 L2_DATA 格式
+
+    返回格式: {stock_code: DataFrame(index=date, columns=[主买净额, 主力净额, ...])}
+    可通过 | db -t stock_metrics 管道入库。
+    """
+    _CSL = _ctx.obj['console']  # type: Console
+    _CFG = _ctx.obj['cfg']  # type: dict
+
+    _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
+    print_locals()
+
+    if not stocks:
+        _CSL.print("[yellow]请至少指定一只股票[/yellow]")
+        return
+
+    _db_url = _assemble_db_url(DB_TYPE, _CFG) if is_save_db else None
+    if _db_url:
+        StockMetrics.init_db(_db_url)
+
+    code_2_df = {}
+    stocks_collected = set()
+
+    try:
+        for stock_idx, stock_code in enumerate(stocks):
+            # 跳转通达信触发 L2 数据拉取（可获得多日历史）
+            # 首只在循环内跳转，后续在上一轮末尾已提前跳转
+            if jump_tdx is not None and stock_idx == 0:
+                tq.exec_to_tdx(url=f"http://www.treeid/code_{stock_code[:6]}")
+                sleep(jump_tdx)
+
+            raw = tq.get_exday_data(stock_code=stock_code, count=count)
+            if not raw or not isinstance(raw, list):
+                _CSL.print(f"[dim]{stock_code}: 无数据[/dim]")
+                continue
+
+            rows = {}
+            for record in raw:
+                date_str = _parse_exday_date(record.get('Date'))
+                if not date_str:
+                    continue
+                metrics = _trans_exday_to_l2_metrics(record)
+
+                # 从 get_more_info 获取正确的主买净额/主力净额（L2_AMO 公式计算结果）
+                try:
+                    metrics['主买净额'] = strict_round(metrics['主买_超_万'] - metrics['主卖_超_万']
+                                            + metrics['主买_大_万'] - metrics['主卖_大_万']
+                                            + metrics['主买_中_万'] - metrics['主卖_中_万']
+                                            + metrics['主买_小_万'] - metrics['主卖_小_万'], xs_flag)
+                    metrics['主力净额'] = strict_round(metrics['买入_超_万'] + metrics['买入_大_万'] - metrics['卖出_超_万'] - metrics['卖出_大_万'], xs_flag)
+                except Exception as e:
+                    E(异常=e)
+                    metrics['主买净额'] = 0
+                    metrics['主力净额'] = 0
+
+                # ── 字段过滤 ──
+                for fe in (field_exclusions or []):
+                    metrics = {k: v for k, v in metrics.items() if fe not in k}
+                for fre in (field_regex_exclusions or []):
+                    try:
+                        metrics = {k: v for k, v in metrics.items() if not re.search(fre, k)}
+                    except re.error:
+                        pass
+                if field_inclusions:
+                    included = {}
+                    for fi in field_inclusions:
+                        included.update({k: v for k, v in metrics.items() if fi in k})
+                    metrics = included
+                if field_regex_inclusions:
+                    included = {}
+                    for fri in field_regex_inclusions:
+                        try:
+                            included.update({k: v for k, v in metrics.items() if re.search(fri, k)})
+                        except re.error:
+                            pass
+                    metrics = included
+
+                rows[date_str] = metrics
+
+            df = pd.DataFrame(rows).T
+            df.index.name = 'date'
+            if not df.empty:
+                code_2_df[stock_code] = df
+                stocks_collected.add(stock_code)
+
+                if verbose or not is_save_db:
+                    print_dataframe(df, title=f"{stock_code} {get_stock_name(stock_code, '')} L2_DATA",
+                                    printer=_CSL.print)
+                else:
+                    _CSL.print(f"{stock_code} {get_stock_name(stock_code, '')}: "
+                               f"{len(df)} 天 L2_DATA")
+
+            # ── 准备下一轮：跳转下一页 → 落盘当前 → 补足 sleep ──
+            if stock_idx + 1 < len(stocks):
+                _t0 = None
+                if jump_tdx is not None:
+                    tq.exec_to_tdx(url=f"http://www.treeid/code_{stocks[stock_idx + 1][:6]}")
+                    _t0 = time()
+
+                # 落盘当前股票（在页面加载期间进行）
+                if is_save_db and _db_url and not df.empty:
+                    _session = StockMetrics.open_batch_session(_db_url)
+                    try:
+                        StockMetrics.batch_upsert_one_stock(
+                            _session, stock_code, df, 'L2_DATA',
+                            '1d', 1, replace=is_replace, console=_CSL)
+                    finally:
+                        _session.close()
+
+                # 若落盘耗时 < jump_tdx，补足剩余等待时间
+                if _t0 is not None:
+                    _elapsed = time() - _t0
+                    if _elapsed < jump_tdx:
+                        sleep(jump_tdx - _elapsed)
+            else:
+                # 最后一只股票：直接落盘
+                if is_save_db and _db_url and not df.empty:
+                    _session = StockMetrics.open_batch_session(_db_url)
+                    try:
+                        StockMetrics.batch_upsert_one_stock(
+                            _session, stock_code, df, 'L2_DATA',
+                            '1d', 1, replace=is_replace, console=_CSL)
+                    finally:
+                        _session.close()
+
+        result = {'dfs': code_2_df, '_source': 'stock_metrics',
+                  'formula_key': 'L2_DATA', 'period': '1d', 'dividend_type': 1}
+        if cache_stocks or _is_pipe_producer:
+            result['stocks'] = stocks_collected
+        return result
+
+    except Exception as e:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, required=True, help='股票代码列表 (如: 688318.SH)')
@@ -1766,14 +2063,14 @@ def stock_block_stat(_ctx: click.Context,
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
     # 确定交易日期
+    now_dt = datetime.now()
     if date is None:
-        now_dt = datetime.now()
         trading_date = calc_belong_trading_day(now_dt, datetime_time(hour=9, minute=30))  # 9:30 之前算前一个交易日
     else:
         trading_date = date
 
     trading_date_str = trading_date.strftime('%Y%m%d')
-    is_realtime = (trading_date_str == datetime.now().strftime('%Y%m%d'))
+    is_realtime = (trading_date_str == calc_belong_trading_day(now_dt, datetime_time(hour=9, minute=30)).strftime('%Y%m%d'))
 
     print_locals()
 
@@ -2357,7 +2654,7 @@ def filter_capital_flow(_ctx: click.Context,
 
     # 是否为实时日期（当日或最近交易日 ≈ 当前）
     is_realtime = (trading_date_str == today_str)
-    
+
     if is_verbose:
         is_with_name = True
 
@@ -2455,7 +2752,7 @@ def filter_capital_flow(_ctx: click.Context,
                 stocks_to_show = [f"{sc}|{get_stock_name(sc)}" for sc in list(passed_stocks)]
             else:
                 stocks_to_show = list(passed_stocks)
-            
+
             result = [{'stock.count': len(stocks_to_show) , 'stock.matched': stocks_to_show}]
             print_dataframe(pd.DataFrame(result), title='符合条件个股')
             # _CSL.print(f"符合条件个股: ", end='')
