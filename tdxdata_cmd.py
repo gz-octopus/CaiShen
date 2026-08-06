@@ -1126,7 +1126,7 @@ _EXDAY_VOLNUM_LABELS = [
 ]
 
 
-def _trans_exday_to_l2_metrics(record: dict) -> dict:
+def _trans_exday_to_l2_metrics(record: dict, xs_flag: int = 2) -> dict:
     """将 get_exday_data 单条原始记录转换为 stock_metrics 的 L2_DATA JSONB 格式
     """
     metrics = {}
@@ -1134,24 +1134,24 @@ def _trans_exday_to_l2_metrics(record: dict) -> dict:
     amo = record.get('Amo', [])
     for (ri, ci), key in _EXDAY_AMO_LABELS:
         try:
-            metrics[key] = float(amo[ri][ci]) / 10000.0
+            metrics[key] = strict_round(float(amo[ri][ci]) / 10000.0, xs_flag)
         except (IndexError, TypeError, ValueError):
-            metrics[key] = 0.0
+            metrics[key] = 0.0 if xs_flag > 0 else 0
 
     vol = record.get('Vol', [])
     for (ri, ci), key in _EXDAY_VOL_LABELS:
         try:
-            metrics[key] = float(vol[ri][ci])
+            metrics[key] = strict_round(vol[ri][ci], xs_flag)
         except (IndexError, TypeError, ValueError):
-            metrics[key] = 0.0
+            metrics[key] = 0.0 if xs_flag > 0 else 0
 
     # 成交笔数
     vol_num = record.get('VolNum', [])
     for (ri, ci), key in _EXDAY_VOLNUM_LABELS:
         try:
-            metrics[key] = float(vol_num[ri][ci])
+            metrics[key] = strict_round(vol_num[ri][ci], xs_flag)
         except (IndexError, TypeError, ValueError):
-            metrics[key] = 0.0
+            metrics[key] = 0.0 if xs_flag > 0 else 0
 
     return metrics
 
@@ -1217,6 +1217,8 @@ def strict_round(x, xg_flag=2):
     rounded = Decimal(x_str).quantize(quant, rounding=ROUND_HALF_UP)
 
     # 4. 返回 float（如要保留 Decimal 精度可去掉 float()）
+    if xg_flag <= 0:
+        return int(rounded)
     return float(rounded)
 
 
@@ -1271,8 +1273,10 @@ def get_exday_data(_ctx: click.Context, stocks: list[str], count: int,
         return
 
     _db_url = _assemble_db_url(DB_TYPE, _CFG) if is_save_db else None
+    _db_session = None  # 复用 session
     if _db_url:
         StockMetrics.init_db(_db_url)
+        _db_session = StockMetrics.open_batch_session(_db_url)
 
     code_2_df = {}
     stocks_collected = set()
@@ -1295,7 +1299,7 @@ def get_exday_data(_ctx: click.Context, stocks: list[str], count: int,
                 date_str = _parse_exday_date(record.get('Date'))
                 if not date_str:
                     continue
-                metrics = _trans_exday_to_l2_metrics(record)
+                metrics = _trans_exday_to_l2_metrics(record, xs_flag)
 
                 # 从 get_more_info 获取正确的主买净额/主力净额（L2_AMO 公式计算结果）
                 try:
@@ -1353,15 +1357,11 @@ def get_exday_data(_ctx: click.Context, stocks: list[str], count: int,
                     tq.exec_to_tdx(url=f"http://www.treeid/code_{stocks[stock_idx + 1][:6]}")
                     _t0 = time()
 
-                # 落盘当前股票（在页面加载期间进行）
+                # 落盘当前股票（在页面加载期间进行，复用 session）
                 if is_save_db and _db_url and not df.empty:
-                    _session = StockMetrics.open_batch_session(_db_url)
-                    try:
-                        StockMetrics.batch_upsert_one_stock(
-                            _session, stock_code, df, 'L2_DATA',
-                            '1d', 1, replace=is_replace, console=_CSL)
-                    finally:
-                        _session.close()
+                    StockMetrics.batch_upsert_one_stock(
+                        _db_session, stock_code, df, 'L2_DATA',
+                        '1d', 1, replace=is_replace, console=_CSL)
 
                 # 若落盘耗时 < jump_tdx，补足剩余等待时间
                 if _t0 is not None:
@@ -1371,13 +1371,9 @@ def get_exday_data(_ctx: click.Context, stocks: list[str], count: int,
             else:
                 # 最后一只股票：直接落盘
                 if is_save_db and _db_url and not df.empty:
-                    _session = StockMetrics.open_batch_session(_db_url)
-                    try:
-                        StockMetrics.batch_upsert_one_stock(
-                            _session, stock_code, df, 'L2_DATA',
-                            '1d', 1, replace=is_replace, console=_CSL)
-                    finally:
-                        _session.close()
+                    StockMetrics.batch_upsert_one_stock(
+                        _db_session, stock_code, df, 'L2_DATA',
+                        '1d', 1, replace=is_replace, console=_CSL)
 
         result = {'dfs': code_2_df, '_source': 'stock_metrics',
                   'formula_key': 'L2_DATA', 'period': '1d', 'dividend_type': 1}
@@ -1387,6 +1383,10 @@ def get_exday_data(_ctx: click.Context, stocks: list[str], count: int,
 
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+    finally:
+        # ── 关闭复用 session ──
+        if _db_session is not None:
+            _db_session.close()
 
 
 
@@ -3352,14 +3352,14 @@ def user_sector(
                 )
                 # 根据用户选择执行业务逻辑
                 if answer == "n":
-                    click.secho("用户取消操作. ", style=Style(color="red"))
+                    click.secho("用户取消操作. ", fg="red")
                     return
                 elif answer == "y" or clear_all:
                     tq.delete_sector(block_code=code)
-                    click.secho("❌ 成功删除自定义板块", style=Style(color="green"))
+                    click.secho("♻️ 成功删除自定义板块", fg="green")
                     # 这里执行单个任务的逻辑
                 elif answer == "a":
-                    _CSL.print("⚠️ 接下来删除余下的自定义板块", style=Style(color="yellow", bold=True))
+                    _CSL.print("⚠️ 接下来删除余下的自定义板块", fg="yellow")
                     clear_all = True
 
                 click.confirm(f"确定要清空自定义板块【代码：{code} 名称：{name}】中的个股吗？", abort=True)
@@ -3894,6 +3894,13 @@ def formula_multi(
     try:
         formula_arg = ','.join(args)
 
+        # ── 复用 session：函数开始创建一次，循环内复用，结束时关闭 ──
+        _m_session = None
+        if is_save_db:
+            _m_db_url = _assemble_db_url(DB_TYPE, _CFG)
+            StockMetrics.init_db(_m_db_url)
+            _m_session = StockMetrics.open_batch_session(_m_db_url)
+
         if formula_type == 'xg':
             # 批量调用选股公式 -----------------------------------------------------------------------------------------
             mul_res = tq.formula_process_mul_xg(
@@ -4046,15 +4053,9 @@ def formula_multi(
                     # 边跑边存：每只股票立即入库（复用 session）
                     if is_save_db and formula_type == 'zb' and not stock_df.empty:
                         formula_key = f"{name}|{','.join(args)}" if args else name
-                        db_url = _assemble_db_url(DB_TYPE, _CFG)
-                        StockMetrics.init_db(db_url)
-                        _m_session = StockMetrics.open_batch_session(db_url)
-                        try:
-                            StockMetrics.batch_upsert_one_stock(
-                                _m_session, stock_code, stock_df, formula_key,
-                                period, dividend_type, console=_CSL)
-                        finally:
-                            _m_session.close()
+                        StockMetrics.batch_upsert_one_stock(
+                            _m_session, stock_code, stock_df, formula_key,
+                            period, dividend_type, console=_CSL)
 
                 if cache_df:
                     formula_key = f"{name}|{','.join(args)}" if args else name
@@ -4063,6 +4064,10 @@ def formula_multi(
                             '_source': 'stock_metrics'}
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+    finally:
+        # ── 关闭复用 session ──
+        if _m_session is not None:
+            _m_session.close()
 
 
 # ---------------------------------------------------------------------------------------------
