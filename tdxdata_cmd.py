@@ -4634,11 +4634,13 @@ def sync_history(_ctx: click.Context, start_date: str, end_date: str | None,
                    + (f" {n_fail[:10]}" if n_fail else ""))
     except Exception:
         _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--date', '-d', 'date', type=DATETIME, default=None,
               help='日期（默认从 from_block_name 中提取，如 吸完·首倍阳_5.20260710 → 20260710）')
 @click.option('--from-block-name', '-fb', 'from_block_name', required=True,
-              help='来源板块名称（从中提取个股，支持 -c 模糊匹配）')
+              help='来源板块名称（从中提取个股）')
 @click.option('--to-block-tip', '-tbt', 'to_block_tip', default='可买入',
               help='目标板块后缀（如 "可买入" → XXXX.可买入.YYYYMMDD）')
 @click.option('--zm-min', '-zm-min', 'zm_min', type=float, default=None,
