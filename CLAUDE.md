@@ -225,3 +225,17 @@ def some_command(_ctx: click.Context, stocks: list[str], ...):
 | 风险 | `slb_query`, `win_rate_report` | 扫雷宝风险分析 + 胜率报告 |
 
 Agent 通过 MCP 协议自动发现完整的 tool schema（参数名、类型、描述），无需手动查阅本文档的参数细节。
+
+## Agent skills
+
+### Issue tracker
+
+CaiShen 的 issue 和规格存放在 GitHub Issues，所有操作通过 `gh` CLI。详见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+issue 使用两个分类标签（bug / enhancement）+ 五个状态标签（needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix）。详见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文：根目录一个 `CONTEXT.md` + `docs/adr/`。详见 `docs/agents/domain.md`。
