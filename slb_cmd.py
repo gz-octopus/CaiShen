@@ -125,7 +125,7 @@ def download(_ctx: click.Context,
 
     # 处理市场参数
     if "ALL" in markets or all_markets:
-        markets = ['SH', 'SZ']
+        markets = ALL_MARKET_LIST
 
     # 收集需要处理的股票
     stocks_schedule = {}  # type: Dict[str, bool]
