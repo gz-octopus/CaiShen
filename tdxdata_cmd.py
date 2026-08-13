@@ -3058,11 +3058,14 @@ def order_stock(_ctx: click.Context,
 @stocks_collector
 @click.option('-c', '--contains', 'contains', multiple=True, callback=split_comma, help='包含的字串')
 @click.option('-v', '--verbose', 'is_verbose', is_flag=True, help='是否打印详细信息')
+@click.option('--date', '-d', 'date', type=DATETIME, default=None,
+              help='日期（默认：若指定了 --contain，便从中提取第一个；否则以最后一个交易日')
 @click.option('-max', '--max-to-show', 'max_to_show', default=20, show_default=True, type=int, help='最多显示多少只股票（仅 is_verbose=True 时有效）')
 @click.pass_context
 def get_user_sector(
     _ctx: click.Context,
     contains: list[str], # 用于查找
+    date: datetime | None,
     is_verbose: bool,
     max_to_show: int,
     cache_stocks: bool,
@@ -3088,16 +3091,29 @@ def get_user_sector(
                     for contain_str in contains:
                         if contain_str in name:
                             sectors_filtered.append(x)
+                            
+                            # ── 提取日期：优先用显式 --date，否则从 每个匹配的板块名中取最后的8位数字，直到成功为止 ──
+                            if date is None:
+                                m = re.search(r'(\d{8})', name)
+                                if m:
+                                    date_str = m.group(1)
+                                    date = TimeUtils.str_to_datetime(date_str)
                             break
 
                 if sectors_filtered:
                     _CSL.print(f"自定义板块（过滤含有 {contains} ）共 {len(sectors_filtered)} / {len(sectors)} 个。" )
+                    
                 else:
                     _CSL.print(f"未发现包含 {contains} 的自定义板块。")
                     return
             else:
                 _CSL.print(f"自定义板块，共 {len(sectors)} 个。")
 
+            if date is None:
+                last_date = calc_belong_trading_day(datetime.now(), dividing_line=datetime_time(9, 30, 0))
+                _CSL.print(f"[yellow]无法从板块名中提取日期，在没有使用 -d/--date 指定的前提下使用最后一个交易日: {last_date} [/yellow]")
+                date = last_date
+            
             # 管道收集：板块 {Code, Name} + 板块内的个股
             user_blocks = []
             all_stocks_in_sectors = set()
@@ -3129,8 +3145,11 @@ def get_user_sector(
 
             # ── 管道返回 ──
             if cache_stocks or _is_pipe_producer:
-                return {'stocks': all_stocks_in_sectors,
-                        'user_blocks': user_blocks}
+                result = {'stocks': all_stocks_in_sectors,
+                       'user_blocks': user_blocks}
+                if date:
+                    result.update({'date': date})
+                return result
         else:
             _CSL.print(f"未发现自定义板块")
     except Exception as e:
@@ -4689,7 +4708,6 @@ def filter_to_block(_ctx: click.Context,
         m = re.search(r'(\d{8})', from_block_name)
         if m:
             date_str = m.group(1)
-            from difoss_stock_util.time_util import TimeUtils
             date = TimeUtils.str_to_datetime(date_str)
         if date is None:
             _CSL.print(f"[red]无法从板块名 '{from_block_name}' 提取日期，请使用 -d 指定[/red]")
