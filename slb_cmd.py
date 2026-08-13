@@ -209,7 +209,7 @@ def download(_ctx: click.Context,
 @click.option('--db-type', '-db', default='pg', show_default=True,
               type=click.Choice(['pg', 'postgresql', 'sqlite'], case_sensitive=False),
               help="数据库类型")
-@click.option('--date', '-d', 'date', type=DATETIME, default=None, help="指定日期（用于历史数据回放）")
+@click.option('--date', 'date', type=DATETIME, default=None, help="指定日期（用于历史数据回放）")
 @click.option('--input-dir', '-i', 'input_dir', default=None, help="扫雷宝json文件所在目录")
 @click.option('--limit', '-l', 'limit', type=int, default=-1, help="限制处理的记录数")
 @click.option('--test', '-t', 'test', is_flag=True, help='测试模式（只检查不实际入库）')
@@ -228,6 +228,8 @@ def import_to_db(_ctx: click.Context,
 
     _CSL = _ctx.obj['console']  # type: Console
     _CFG = _ctx.obj['cfg']  # type: dict
+    
+    print_locals()
 
     if date is None:
         date = datetime.now()
