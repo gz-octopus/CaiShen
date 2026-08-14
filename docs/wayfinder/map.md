@@ -16,6 +16,7 @@
 - **执行覆盖（Notes override）**：本 effort 不止出决策——「第一闭环」（数据→因子→策略→回测→报告最小通路）作为落地执行包含在地图内，由后续开发会话执行；地图 ticket 只解决决策。
 - **会话惯例**：CaiShen 惯例（中文注释/文档、CLI 入口）；grilling 会话用 /grilling + /domain-modeling。
 - **路线图**：第一闭环（T1 定义）→ 系统骨架（T3）→ 报告（T5）→ 因子流水线（T7）→ 公式翻译器（T6，目的地一部分但不进第一闭环）。
+- **执行状态**：第一闭环已落地（2026-08-14，分支 first-loop）——`python -m strategy_research first-loop` 验收全过（T1 七条，含重跑逐位一致）；权息库 55,717 条 / 5,276 只已导入（stock.db 位于 strategy_research/data，gitignore）。
 
 ## Decisions so far
 

@@ -4,6 +4,15 @@
 路径解析规则：
 - config.yaml 中 hikyuu 组的相对路径以 config.yaml 所在目录（仓库根）为基准；
 - 未配置或为空时回退到包内默认（strategy_research/ 下自包含）。
+
+config.yaml 可选追加格式（全部项可不配，默认值即 T1 定稿值）：
+
+    hikyuu:
+      ini_path: strategy_research/hikyuu.ini   # hikyuu 原生配置，留空则用包内默认
+      report_dir: strategy_research/reports    # 报告输出目录，留空则用包内默认
+      init_cash: 1000000                       # 初始资金（T1 定稿 100 万）
+      cost_func: TC_FixedA2017                 # 交易成本函数
+      slippage: 0.001                          # 滑点 0.1%（SP_FixedPercent）
 """
 from __future__ import annotations
 
