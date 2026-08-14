@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""回测执行：System + TradeManager 事件驱动（T1 定稿）。
+"""回测执行：System + TradeManager 事件驱动。
 
 - 单标的 sh000001 MA(10)/MA(30) 金叉择时，区间 2020-01-02 ~ 2026-08-13
 - 复权 FORWARD（前复权）；信号次日开盘价成交（System 原生 buy_delay/sell_delay）
@@ -22,8 +22,8 @@ from . import strategy as st_mod
 from .check import run_check
 from .report import calc_max_drawdown, calc_sharpe
 
-# 报告区块 1 的 T+1 声明（T1 验收条目 7）
-T1_DISCLAIMER = (
+# 报告区块 1 的 T+1 制度声明
+TPLUS1_DISCLAIMER = (
     'T+1 制度说明：本回测的买入/卖出信号均由 System 默认 buy_delay/sell_delay 推迟到'
     '下一交易日开盘执行，且金叉与死叉不可能出现在同一根 K 线，因此卖出日与买入日之间'
     '必然间隔 ≥1 个交易日——T+1 制度在日线次日开盘执行模型下自动满足'
@@ -49,7 +49,7 @@ class BacktestResult:
     sharpe: float = 0.0                                # 自算年化夏普（report.calc_sharpe）
     max_drawdown_mdd: float = 0.0                      # MDD 指标值（百分点）
     max_drawdown_self: float = 0.0                     # 自实现算法值（report.calc_max_drawdown）
-    max_drawdown_consistent: bool = False              # 两独立实现一致才通过（T5 修订）
+    max_drawdown_consistent: bool = False              # 两独立实现一致才通过
 
 
 def _fmt_num(v) -> float:
@@ -61,7 +61,7 @@ def _fmt_num(v) -> float:
 
 
 def build_trade_manager(start: str, init_cash: float, cost_func: str, name: str) -> hku.TradeManager:
-    """crtTM(date=, init_cash=, cost_func=, name=) 是 2.8.1 唯一正确构造（T5 落地约束）。"""
+    """crtTM(date=, init_cash=, cost_func=, name=) 是 2.8.1 唯一正确构造方式（旧 4 参构造已废）。"""
     cost_cls = getattr(hku, cost_func, None)
     if cost_cls is None:
         raise ValueError(f'未知交易成本函数: {cost_func}')
@@ -110,7 +110,7 @@ def _extract_trades(tm: hku.TradeManager) -> list[dict]:
 def _calc_funds_curve_and_drawdown(tm: hku.TradeManager, dates) -> tuple[list, list, float]:
     """资金曲线（总资产日序列）+ MDD 回撤序列 + MDD 指标最大回撤（百分点）。
 
-    MDD 指标对资金曲线序列计算（T5 定稿）；交叉验证用 tm.get_max_pull_back。
+    MDD 指标对资金曲线序列计算（正值，百分点）；交叉验证用自实现算法（见 run_backtest）。
     """
     funds = tm.get_funds_curve(dates, 'DAY')
     curve = [{'date': str(d), 'value': _fmt_num(v)} for d, v in zip(dates, funds)]
@@ -132,7 +132,7 @@ def run_backtest(start: str | None = None, end: str | None = None,
                  draw_charts: bool = True) -> BacktestResult:
     """执行回测并落盘结果（JSON + PNG）。
 
-    :param skip_check: 跳过数据就绪校验（默认 False，T1 要求任一不过拒绝回测）
+    :param skip_check: 跳过数据就绪校验（默认 False，任一不过拒绝回测）
     """
     t0 = time.time()
     config = cfg_mod.init_hikyuu(config)
@@ -155,7 +155,7 @@ def run_backtest(start: str | None = None, end: str | None = None,
 
     if not skip_check:
         if not run_check(print_table=True):
-            raise RuntimeError('数据就绪校验未通过，拒绝回测（T1 验收条目 2）')
+            raise RuntimeError('数据就绪校验未通过，拒绝回测')
 
     stock = hku.sm[stock_code]
     # DATE 查询 end 边界为 exclusive（2.8.1 实测：end=08-13 得最后根 08-12），
@@ -187,7 +187,7 @@ def run_backtest(start: str | None = None, end: str | None = None,
     daily_values = [x['value'] for x in curve]
     daily_returns = [b / a - 1 for a, b in zip(daily_values[:-1], daily_values[1:])]
     sharpe = calc_sharpe(daily_returns)
-    # 交叉验证（T5 修订）：MDD 指标 × 自实现算法。
+    # 交叉验证：MDD 指标 × 自实现算法。
     # get_max_pull_back 在 2.8.1 恒返回 0.0（实测指数+个股、多日期均如此），不可用
     max_drawdown_self = calc_max_drawdown(daily_values)
     mdd_consistent = abs(max_drawdown_mdd - max_drawdown_self) < 0.01
@@ -210,7 +210,7 @@ def run_backtest(start: str | None = None, end: str | None = None,
             'slippage': slippage,
             'fast_n': fast_n,
             'slow_n': slow_n,
-            't_plus_1_disclaimer': T1_DISCLAIMER,
+            't_plus_1_disclaimer': TPLUS1_DISCLAIMER,
             'generated_at': _dt.now().strftime('%Y-%m-%d %H:%M:%S'),
             'hikyuu_version': hku.__version__ if hasattr(hku, '__version__') else '',
         },
@@ -237,7 +237,7 @@ def run_backtest(start: str | None = None, end: str | None = None,
 
 
 def draw_funds_chart(tm: hku.TradeManager, query: hku.Query, result_dir: Path) -> Path:
-    """资金曲线图：hikyuu tm.performance（收益曲线 + 基准 + 统计文本），savefig → PNG（T5 定稿）。"""
+    """资金曲线图：hikyuu tm.performance（收益曲线 + 基准 + 统计文本），savefig → PNG。"""
     import matplotlib.pyplot as plt
 
     # TradeManager.performance 由 hikyuu.draw.drawplot 在 import hikyuu 时绑定
@@ -250,7 +250,7 @@ def draw_funds_chart(tm: hku.TradeManager, query: hku.Query, result_dir: Path) -
 
 
 def draw_drawdown_chart(drawdown_series: list, result_dir: Path) -> Path:
-    """回撤曲线图：MDD 序列独立小图（tm_performance 未含回撤子图，T5 预留给的补图分支）。
+    """回撤曲线图：MDD 序列独立小图（tm_performance 未含回撤子图，故补此独立图）。
 
     实现要点（实测修正）：x 轴必须用 datetime 对象而非字符串——字符串会被
     matplotlib 当分类轴，fill_between 多边形闭合错乱产生大片黑块（渲染 bug）；

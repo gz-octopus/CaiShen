@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""报告层：自算指标 + jinja2 单文件 html（T5 定稿）。
+"""报告层：自算指标 + jinja2 单文件 html。
 
 - 自算年化夏普：get_funds_curve 日收益率 mean/std × √252，无风险利率 0（纯函数 calc_sharpe，可单测）
-- 最大回撤：backtest 阶段 MDD 指标 × get_max_pull_back 交叉验证（两值一致才通过），此处仅呈现
+- 最大回撤：backtest 阶段 MDD 指标与自实现算法交叉验证（两值一致才通过），此处仅呈现
 - html：jinja2 单文件自包含（图表 base64 内嵌），6 区块布局，固定名 first_loop_report.html
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 TEMPLATE_PATH = Path(__file__).resolve().parent / 'report' / 'template.html'
 DEFAULT_REPORT_NAME = cfg_mod.DEFAULT_REPORT_NAME
 
-# 53 项中用于指标卡 ×6 的 key（T5 定稿；key 名以 Performance.names() 实测为准）
+# 53 项中用于指标卡 ×6 的 key（key 名以 2.8.1 Performance.names() 实测为准）
 KEY_ANNUAL_RETURN = '帐户平均年收益率%'
 KEY_WIN_RATE = '赢利交易比例%'
 KEY_PROFIT_LOSS_RATIO = '平均赢利/平均亏损比例'
@@ -31,7 +31,7 @@ KEY_TRADE_COUNT = '已平仓交易总数'
 
 
 def calc_sharpe(daily_returns, periods_per_year: int = 252) -> float:
-    """自算年化夏普：日收益率 mean/std × √周期数，无风险利率 0（T5 定稿口径）。
+    """自算年化夏普：日收益率 mean/std × √周期数，无风险利率 0。
 
     空仓段日收益为 0（资金不变），计入序列；std 为样本标准差（ddof=1）。
     """
@@ -49,7 +49,7 @@ def calc_sharpe(daily_returns, periods_per_year: int = 252) -> float:
 def calc_max_drawdown(equity_values) -> float:
     """自实现最大回撤（百分点，正数）：max over t of (peak_before_t - value_t) / peak_before_t × 100。
 
-    与 hikyuu MDD 指标交叉验证用（T5 修订：get_max_pull_back 在 2.8.1 恒返回 0.0
+    与 hikyuu MDD 指标交叉验证用（get_max_pull_back 在 2.8.1 恒返回 0.0
     不可用——实测指数+个股、多日期均如此，交叉验证改用本函数与 MDD 指标互证）。
     空仓段资金不变，回撤为 0，不影响峰值跟踪。
     """
@@ -88,7 +88,7 @@ def _pick_stat(stats: dict, key: str, default=0.0):
 def build_view(result: BacktestResult, result_dir: Path) -> dict:
     """组装模板上下文（6 区块数据）。"""
     meta = result.meta
-    # 指标卡 ×6（T5：年化收益/夏普/最大回撤/胜率/盈亏比/交易次数）
+    # 指标卡 ×6：年化收益/夏普/最大回撤/胜率/盈亏比/交易次数
     cards = [
         {'label': '年化收益', 'value': f"{_pick_stat(result.stats, KEY_ANNUAL_RETURN):.2f}%",
          'unit': '%'},

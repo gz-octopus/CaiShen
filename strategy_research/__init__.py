@@ -5,7 +5,7 @@
 回测（System + TradeManager）→ 报告（Performance 53 项 + html）。
 
 入口：python -m strategy_research [check|backtest|report|first-loop]
-设计定稿见 docs/wayfinder/tickets/T1/T2/T3/T5。
+设计文档见 docs/wayfinder/。
 """
 
 __version__ = '0.1.0'
