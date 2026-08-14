@@ -4323,6 +4323,8 @@ def print_pipe(_ctx: click.Context,
         _CSL.print(f"\n[bold cyan]📦 blocks[/bold cyan] （[bold]{len(_blocks)}[/bold] 个板块）:")
         _CSL.print(Pretty(_blocks, max_length=max_to_show) if len(_blocks) > max_to_show else list(_blocks))
 
+    return pipe_data
+
 
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @stocks_collector
