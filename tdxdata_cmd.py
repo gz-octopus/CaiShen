@@ -2326,7 +2326,7 @@ def _export_to_xlsx(filename: str | None, sheets: list[tuple[str, pd.DataFrame]]
 @click.option('--daily', '-dl', 'daily', is_flag=True,
               help='逐日输出模式：从买入日起每一天输出一个持仓盈亏 DataFrame')
 @click.option('--count', '-c', 'count_n', type=int, default=0, show_default=True,
-              help='逐日输出模式：仅显示最近 N 个交易日（隐含 -dl）')
+              help='逐日输出模式：显示买入日收盘后 N 个交易日的盈亏（隐含 -dl）')
 @click.option('--intraday', '-id', 'intraday', is_flag=True,
               help='日内盈亏曲线（仅 -dl 时生效，需安装 plotext）')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的逐日 K 线明细）')
@@ -2362,7 +2362,7 @@ def stock_stat(_ctx: click.Context,
 
     使用示例：
         ss -s 603358.SH -d 2026-06-01 -dl              # 每日持仓盈亏表
-        ss -s 603358.SH -d 2026-06-01 -c 5             # 逐日模式，仅显示最近 5 个交易日
+        ss -s 603358.SH -d 2026-06-01 -c 5             # 逐日模式，显示买入日收盘后 5 个交易日的盈亏
         gs -m 50 | ss -d 2026-07-01 -top 10            # 全A股7月1日买入，前10名
         ss -s 603358.SH -d 2026-06-01 -v               # 逐 K 线明细
     """
@@ -2422,7 +2422,10 @@ def stock_stat(_ctx: click.Context,
                 all_trading_days.update(df.index)
         trading_days = sorted(all_trading_days)
         entry_ts = pd.Timestamp(entry_date)
-        trading_days = [d for d in trading_days if d >= entry_ts]
+        # 排除买入日当天：买入日收盘价即为成本基准，当天无盈亏数据
+        # （与 post_entry 的 df.index > entry_idx 保持一致），确保
+        # trading_days 中每一天都能命中 pnl_list，避免 -c N 少显示一天
+        trading_days = [d for d in trading_days if d > entry_ts]
 
         if not trading_days:
             _CSL.print("[yellow]买入日后无交易数据[/yellow]")
@@ -2477,7 +2480,7 @@ def stock_stat(_ctx: click.Context,
 
         # ── Step 3a: 逐日输出模式 ──
         if daily:
-            show_days = trading_days if count_n <= 0 else trading_days[-count_n:]
+            show_days = trading_days if count_n <= 0 else trading_days[:count_n]
             progress_print(f"[bold]STEP 3/3[/bold] 逐日输出持仓表（共 {len(show_days)} 个交易日）...")
             for _, day in enumerate(show_days):
                 day_rows = []
