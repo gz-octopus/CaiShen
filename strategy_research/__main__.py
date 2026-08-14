@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""strategy_research CLI 入口：python -m strategy_research（T3 定稿四子命令）。
+"""strategy_research CLI 入口：python -m strategy_research，四子命令。
 
 check      数据就绪校验（tdxw 进程 + 权息非空抽样比对）
 backtest   跑回测，结果落盘（JSON + 图表 PNG）
 report     从回测结果出 html 报告
-first-loop check → backtest → report 一键（T1 验收物）
+first-loop check → backtest → report 一键完整链路
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def cli():
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
 def check():
-    """数据就绪校验（T1 两项：tdxw 进程 + 权息非空抽样比对），任一不过拒绝回测。"""
+    """数据就绪校验：tdxw 进程 + 权息非空抽样比对，任一不过拒绝回测。"""
     try:
         from .check import run_check
         ok = run_check()
@@ -42,7 +42,7 @@ def check():
 @click.option('--end', default=cfg_mod.DEFAULT_END, show_default=True, help='回测结束日期')
 @click.option('--stock', '-s', default=cfg_mod.DEFAULT_STOCK, show_default=True, help='策略标的')
 @click.option('--init-cash', type=float, default=None, help='初始资金（默认取 config.yaml，未配置 100 万）')
-@click.option('--skip-check', is_flag=True, help='跳过数据就绪校验（不推荐，T1 要求校验通过才回测）')
+@click.option('--skip-check', is_flag=True, help='跳过数据就绪校验（不推荐，校验通过才允许回测）')
 def backtest(start, end, stock, init_cash, skip_check):
     """跑回测：sh000001 MA(10)/MA(30) 金叉择时，结果落盘（JSON + 图表 PNG）。"""
     from .backtest import run_backtest
@@ -73,9 +73,9 @@ def report(output):
 @click.option('--end', default=cfg_mod.DEFAULT_END, show_default=True, help='回测结束日期')
 @click.option('--output', '-o', type=click.Path(path_type=Path), default=None,
               help='报告输出路径（默认 report_dir/first_loop_report.html）')
-@click.option('--skip-check', is_flag=True, help='跳过数据就绪校验（不推荐，T1 要求校验通过才回测）')
+@click.option('--skip-check', is_flag=True, help='跳过数据就绪校验（不推荐，校验通过才允许回测）')
 def first_loop(start, end, output, skip_check):
-    """一键完整链路：数据就绪校验 → 回测 → html 报告（T1 验收物）。"""
+    """一键完整链路：数据就绪校验 → 回测 → html 报告。"""
     from .backtest import run_backtest
     from .report import render_html
     try:

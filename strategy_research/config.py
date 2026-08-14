@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""配置管理：仓库根 config.yaml 的 hikyuu 组 + hikyuu 初始化（T3 定稿）。
+"""配置管理：仓库根 config.yaml 的 hikyuu 组 + hikyuu 初始化。
 
 路径解析规则：
 - config.yaml 中 hikyuu 组的相对路径以 config.yaml 所在目录（仓库根）为基准；
 - 未配置或为空时回退到包内默认（strategy_research/ 下自包含）。
 
-config.yaml 可选追加格式（全部项可不配，默认值即 T1 定稿值）：
+config.yaml 可选追加格式（全部项可不配，默认值即下方 DEFAULT_* 常量）：
 
     hikyuu:
       ini_path: strategy_research/hikyuu.ini   # hikyuu 原生配置，留空则用包内默认
       report_dir: strategy_research/reports    # 报告输出目录，留空则用包内默认
-      init_cash: 1000000                       # 初始资金（T1 定稿 100 万）
+      init_cash: 1000000                       # 初始资金
       cost_func: TC_FixedA2017                 # 交易成本函数
       slippage: 0.001                          # 滑点 0.1%（SP_FixedPercent）
 """
@@ -29,7 +29,7 @@ REPO_DIR = PKG_DIR.parent
 # 仓库根 config.yaml
 CONFIG_YAML = REPO_DIR / 'config.yaml'
 
-# T1/T3 定稿默认值
+# 回测默认值（与 config.yaml 可选项一一对应）
 DEFAULT_START = '2020-01-02'          # 回测起始（本地数据最早交易日）
 DEFAULT_END = '2026-08-13'            # 回测结束（最新交易日）
 DEFAULT_STOCK = 'sh000001'            # 上证指数
@@ -106,8 +106,8 @@ def load_config(config_path: Path | str | None = None) -> HikyuuConfig:
 def init_hikyuu(config: HikyuuConfig | None = None) -> HikyuuConfig:
     """初始化 hikyuu 全局系统（StockManager 等）。
 
-    必须最先调用 matplotlib.use('Agg') 再 import hikyuu（T5 落地约束：
-    无 GUI 环境出 PNG 必需）。hikyuu 初始化开销大，重复调用自动跳过。
+    必须最先调用 matplotlib.use('Agg') 再 import hikyuu（无 GUI 环境出 PNG 必需）。
+    hikyuu 初始化开销大，重复调用自动跳过。
     """
     import matplotlib
     matplotlib.use('Agg')

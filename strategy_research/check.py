@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""数据就绪校验（T1 验收条目 2，两项任一不过拒绝回测）。
+"""数据就绪校验：两项任一不过拒绝回测。
 
 校验 1：tdxw.exe 进程在（权息接口与数据更新依赖通达信客户端）
 校验 2：权息表非空 + 抽样 3~5 只 get_weight() 条数/最近权息日与 tqcenter 源比对
 
-不校验日线尾部日期（用户决定，T1 定稿剔除）。
+不校验日线尾部日期（尾部新鲜度依赖客户端盘后自动下载，下载后 .day 自动更新）。
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import pandas as pd
 
 from difoss_stock_util import E, I, P, W
 
-# 通达信金融量化测试版 PYPlugins（tdxquant tqcenter 直取；T4 票负责正式适配）
+# 通达信金融量化测试版 PYPlugins（tdxquant tqcenter 直取）
 TDX_PYPLUGINS_DIRS = [r'D:\new_tdx_tet\PYPlugins\user', r'D:\new_tdx_tet\PYPlugins']
 
 # 权息抽样比对样本（固定列表，保证验收可复现）
@@ -50,7 +50,7 @@ def _query_tq_divid_factors(code: str) -> pd.DataFrame:
     """经 tqcenter 直取客户端权息（需 tdxw.exe 运行）。
 
     返回 DataFrame 与 tq.get_divid_factors 一致，Type=15 已剔除
-    （导入侧跳过 Type=15，比对口径须一致，见 T2 SOP ④）。
+    （导入侧跳过 Type=15，比对口径须一致）。
     """
     for p in TDX_PYPLUGINS_DIRS:
         if p not in sys.path:
@@ -75,14 +75,14 @@ def check_weight_ready(ini_path: Path, samples: list[str] | None = None,
                        print_table: bool = True) -> bool:
     """校验 2：权息表非空 + 抽样比对（条数 + 最近权息日）。
 
-    高危背景（T2 风险 3）：权息表为空时 hikyuu 静默用未复权价、无任何报错，
+    高危背景：权息表为空时 hikyuu 静默用未复权价、无任何报错，
     因此该项必须通过才允许回测。
     """
     if samples is None:
         samples = SAMPLE_STOCKS
     db_path = _get_stock_db_path(ini_path)
 
-    # 2a. 权息表非空
+    # 权息表非空是前置门槛：空表时 hikyuu 静默用未复权价
     import sqlite3
     con = sqlite3.connect(str(db_path))
     try:
@@ -96,7 +96,7 @@ def check_weight_ready(ini_path: Path, samples: list[str] | None = None,
         E('就绪校验 2/2 失败：权息表为空（hikyuu 将静默使用未复权价，禁止回测）')
         return False
 
-    # 2b. 抽样比对：hikyuu get_weight() vs tqcenter get_divid_factors
+    # 抽样比对：hikyuu 权息表与 tqcenter 源数据须条数/最近权息日一致
     import hikyuu as hku
     rows = []
     ok = True
@@ -124,7 +124,7 @@ def check_weight_ready(ini_path: Path, samples: list[str] | None = None,
     if ok:
         I(f'就绪校验 2/2 通过：权息表 {count} 条非空，抽样 {len(samples)} 只条数/最近权息日全部一致')
     else:
-        E('就绪校验 2/2 失败：抽样比对不一致，请重跑权息导入（见 T2 SOP ④）')
+        E('就绪校验 2/2 失败：抽样比对不一致，请重跑权息导入')
     return ok
 
 
@@ -132,7 +132,7 @@ def run_check(ini_path: Path | None = None, print_table: bool = True) -> bool:
     """执行全部就绪校验，返回是否通过（任一不过拒绝回测）。"""
     from . import config as cfg_mod
 
-    P('====== 数据就绪校验（T1 两项） ======')
+    P('====== 数据就绪校验 ======')
     if ini_path is None:
         # 必须先初始化 StockManager（包内 hikyuu.ini），否则 get_weight() 走默认配置读不到权息
         ini_path = cfg_mod.init_hikyuu().ini_path
