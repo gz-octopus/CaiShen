@@ -2325,6 +2325,8 @@ def _export_to_xlsx(filename: str | None, sheets: list[tuple[str, pd.DataFrame]]
               help='结束统计日期（默认：今天）')
 @click.option('--daily', '-dl', 'daily', is_flag=True,
               help='逐日输出模式：从买入日起每一天输出一个持仓盈亏 DataFrame')
+@click.option('--count', '-c', 'count_n', type=int, default=0, show_default=True,
+              help='逐日输出模式：仅显示最近 N 个交易日（隐含 -dl）')
 @click.option('--intraday', '-id', 'intraday', is_flag=True,
               help='日内盈亏曲线（仅 -dl 时生效，需安装 plotext）')
 @click.option('--verbose', '-v', 'is_verbose', is_flag=True, help='详细模式（打印每只个股的逐日 K 线明细）')
@@ -2340,6 +2342,7 @@ def stock_stat(_ctx: click.Context,
     date: datetime | None,
     end_time: datetime | None,
     daily: bool,
+    count_n: int,
     intraday: bool,
     is_verbose: bool,
     top_n: int,
@@ -2359,6 +2362,7 @@ def stock_stat(_ctx: click.Context,
 
     使用示例：
         ss -s 603358.SH -d 2026-06-01 -dl              # 每日持仓盈亏表
+        ss -s 603358.SH -d 2026-06-01 -c 5             # 逐日模式，仅显示最近 5 个交易日
         gs -m 50 | ss -d 2026-07-01 -top 10            # 全A股7月1日买入，前10名
         ss -s 603358.SH -d 2026-06-01 -v               # 逐 K 线明细
     """
@@ -2380,7 +2384,9 @@ def stock_stat(_ctx: click.Context,
     entry_date_str = entry_date.strftime('%Y%m%d')
     end_date_str = end_date.strftime('%Y%m%d')
 
-    print_locals()
+    # --count 隐含逐日输出模式
+    if count_n > 0:
+        daily = True
 
     try:
         stocks_list = list(stocks)
@@ -2471,8 +2477,9 @@ def stock_stat(_ctx: click.Context,
 
         # ── Step 3a: 逐日输出模式 ──
         if daily:
-            progress_print(f"[bold]STEP 3/3[/bold] 逐日输出持仓表（共 {len(trading_days)} 个交易日）...")
-            for _, day in enumerate(trading_days):
+            show_days = trading_days if count_n <= 0 else trading_days[-count_n:]
+            progress_print(f"[bold]STEP 3/3[/bold] 逐日输出持仓表（共 {len(show_days)} 个交易日）...")
+            for _, day in enumerate(show_days):
                 day_rows = []
                 for full_code, info in stock_pnl.items():
                     pnl_list = info['daily']
@@ -3091,7 +3098,7 @@ def get_user_sector(
                     for contain_str in contains:
                         if contain_str in name:
                             sectors_filtered.append(x)
-                            
+
                             # ── 提取日期：优先用显式 --date，否则从 每个匹配的板块名中取最后的8位数字，直到成功为止 ──
                             if date is None:
                                 m = re.search(r'(\d{8})', name)
@@ -3102,7 +3109,7 @@ def get_user_sector(
 
                 if sectors_filtered:
                     _CSL.print(f"自定义板块（过滤含有 {contains} ）共 {len(sectors_filtered)} / {len(sectors)} 个。" )
-                    
+
                 else:
                     _CSL.print(f"未发现包含 {contains} 的自定义板块。")
                     return
@@ -3113,7 +3120,7 @@ def get_user_sector(
                 last_date = calc_belong_trading_day(datetime.now(), dividing_line=datetime_time(9, 30, 0))
                 _CSL.print(f"[yellow]无法从板块名中提取日期，在没有使用 -d/--date 指定的前提下使用最后一个交易日: {last_date} [/yellow]")
                 date = last_date
-            
+
             # 管道收集：板块 {Code, Name} + 板块内的个股
             user_blocks = []
             all_stocks_in_sectors = set()
@@ -3148,7 +3155,7 @@ def get_user_sector(
                 result = {'stocks': all_stocks_in_sectors,
                        'user_blocks': user_blocks}
                 if date:
-                    result.update({'date': date})
+                    result.update({'date': date.strftime('%Y%m%d')})
                 return result
         else:
             _CSL.print(f"未发现自定义板块")
