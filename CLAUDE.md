@@ -236,6 +236,10 @@ CaiShen 的 issue 和规格存放在 GitHub Issues，所有操作通过 `gh` CLI
 
 issue 使用两个分类标签（bug / enhancement）+ 五个状态标签（needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix）。详见 `docs/agents/triage-labels.md`。
 
+### Code conventions
+
+注释只写“是什么/为什么”（禁止计划步骤/TODO），命名与生成物规则见 docs/agents/code-conventions.md。
+
 ### Domain docs
 
 单上下文：根目录一个 `CONTEXT.md` + `docs/adr/`。详见 `docs/agents/domain.md`。
