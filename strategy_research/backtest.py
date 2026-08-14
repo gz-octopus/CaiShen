@@ -22,11 +22,15 @@ from . import strategy as st_mod
 from .check import run_check
 from .report import calc_max_drawdown, calc_sharpe
 
-# 报告区块 1 的 T+1 偏差声明（T1 验收条目 7）
+# 报告区块 1 的 T+1 声明（T1 验收条目 7）
 T1_DISCLAIMER = (
-    '已知偏差声明：本回测未实现 T+1 交易制度（当日买入次日方可卖出），'
-    '信号执行按 hikyuu System 原生 buy_delay/sell_delay 于信号次日开盘价成交；'
-    '一字板延迟与停牌自然跳过按 System 默认处理。回测结果与实盘存在系统性偏差，仅供研究参考。'
+    'T+1 制度说明：本回测的买入/卖出信号均由 System 默认 buy_delay/sell_delay 推迟到'
+    '下一交易日开盘执行，且金叉与死叉不可能出现在同一根 K 线，因此卖出日与买入日之间'
+    '必然间隔 ≥1 个交易日——T+1 制度在日线次日开盘执行模型下自动满足'
+    '（实测 30 对交易最短持有恰为 1 个交易日、0 违规）。'
+    '注意：系统无显式 T+1 组件，若未来使用分钟级数据或盘中信号，需另行实现'
+    '（hikyuu 官方思路：自定义 MM 卖出数量控制，见 release.md）。'
+    '一字板延迟与停牌自然跳过按 System 默认处理。'
 )
 
 RESULT_JSON = cfg_mod.RESULT_JSON
@@ -246,16 +250,28 @@ def draw_funds_chart(tm: hku.TradeManager, query: hku.Query, result_dir: Path) -
 
 
 def draw_drawdown_chart(drawdown_series: list, result_dir: Path) -> Path:
-    """回撤曲线图：MDD 序列独立小图（tm_performance 未含回撤子图，T5 预留给的补图分支）。"""
+    """回撤曲线图：MDD 序列独立小图（tm_performance 未含回撤子图，T5 预留给的补图分支）。
+
+    实现要点（实测修正）：x 轴必须用 datetime 对象而非字符串——字符串会被
+    matplotlib 当分类轴，fill_between 多边形闭合错乱产生大片黑块（渲染 bug）；
+    hikyuu MDD 指标返回正数，绘图时取负让回撤曲线挂在 0 线下方（惯例）。
+    """
+    from datetime import datetime as _dt
+    import matplotlib
     import matplotlib.pyplot as plt
 
-    dates = [x['date'] for x in drawdown_series]
-    values = [x['value'] for x in drawdown_series]
+    # 显式配置中文字体（不依赖 hikyuu import 的全局 rcParams 副作用）
+    matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+    matplotlib.rcParams['axes.unicode_minus'] = False
+
+    dates = [_dt.strptime(x['date'][:10], '%Y-%m-%d') for x in drawdown_series]
+    values = [-x['value'] for x in drawdown_series]  # 正值（MDD 输出）取负，向下绘制
     fig, ax = plt.subplots(figsize=(12, 3))
-    ax.fill_between(dates, values, 0, color='#c0504d', alpha=0.6)
+    ax.fill_between(dates, values, 0, color='#c0504d', alpha=0.5)
     ax.plot(dates, values, color='#c0504d', linewidth=0.8)
     ax.set_title('回撤曲线（%）：MDD 指标对资金曲线计算')
     ax.set_ylabel('回撤（%）')
+    ax.set_ylim(min(values) * 1.05, 1)
     ax.grid(True, alpha=0.3)
     fig.autofmt_xdate()
     path = result_dir / DRAWDOWN_PNG

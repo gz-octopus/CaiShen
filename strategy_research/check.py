@@ -82,7 +82,7 @@ def check_weight_ready(ini_path: Path, samples: list[str] | None = None,
         samples = SAMPLE_STOCKS
     db_path = _get_stock_db_path(ini_path)
 
-    # 2a. 权息表非空
+    # 权息表非空是前置门槛：空表时 hikyuu 静默用未复权价
     import sqlite3
     con = sqlite3.connect(str(db_path))
     try:
@@ -96,7 +96,7 @@ def check_weight_ready(ini_path: Path, samples: list[str] | None = None,
         E('就绪校验 2/2 失败：权息表为空（hikyuu 将静默使用未复权价，禁止回测）')
         return False
 
-    # 2b. 抽样比对：hikyuu get_weight() vs tqcenter get_divid_factors
+    # 抽样比对：hikyuu 权息表与 tqcenter 源数据须条数/最近权息日一致
     import hikyuu as hku
     rows = []
     ok = True
