@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, time as datetime_time
 from typing import List, Optional
 from pathlib import Path
 from difoss_stock_util import *
+from tdx_quant.tqcenter import tq
 
 
 def fetch_tdx_json(stock_code):
@@ -120,7 +121,7 @@ def main(
     """
 
     I(NOW_DT=NOW_DT, BELONG_TRADING_DATE=BELONG_TRADING_DATE)
-    
+
     print_locals()
 
     if very_verbose:
@@ -134,6 +135,10 @@ def main(
     # 处理文件夹
     if not os.path.isdir(output_dir):
         os.mkdir(output_dir)
+
+    # 初始化 tq 连接
+    tq.initialize(__file__)
+    click.echo("✅ TQ 初始化成功")
 
     # 初始化数据库
     if db_type:
@@ -184,8 +189,9 @@ def main(
     steps = [
         ("根据市场统计股票", 5),
         ("统计现有扫雷宝文件", 11),
+        ("对比tdx安全分", 10),
         ("下载新的扫雷宝数据", 40),
-        ("文件对比入库", 40),
+        ("文件对比入库", 30),
         ("生成【自定义序列(字符串,数值)】【自定义序列(日期,数值)】文件", 4),
     ]
 
@@ -233,7 +239,7 @@ def main(
             mgr = SLBFileManager(output_dir)
             stocks_existing = mgr.get_stock_codes()
             for _, full_code in enumerate_with_progress(stocks_existing, task_name=step_name):
-                stocks_schedule.pop(full_code, None) # 为优化速度，直接踢出已经下载的 code
+                stocks_schedule.pop(full_code, None) # 为优化速度，直接踢除已经下载的 code
 
             I("🚧", 股票总数=all_count, 已经下载文件=len(stocks_existing),
                 需要处理_个=len(stocks_schedule))
@@ -241,7 +247,37 @@ def main(
             if verbose:
                 I(需处理个股=stocks_schedule.keys())
 
-        elif step_NI == 3: # 下载 -------------------------------------------------------------------------------------------------------------
+        elif step_NI == 3: # 使用 tdx 查询当日个股安全分，对比数据最新的扫雷宝分数后，如果安全分不等于扫雷宝分，则下载，否则跳过
+
+            risk_summaries_by_code = {}
+            risk_summaries = SLBDetail.get_latest_risk_summary(when=NOW_DT)
+            I(最新风险摘要数量=len(risk_summaries))
+            for rs in risk_summaries:
+                # I(rs.InstrumentID, rs.ExchangeID, rs.total_risk_score)
+                code = SecurityCode(code=rs.InstrumentID, market=rs.ExchangeID)
+                risk_summaries_by_code[code.full_code] = rs
+
+            for _, stock_code in enumerate_with_progress(stocks_schedule.keys(), task_name=step_name):
+                info = tq.get_more_info(stock_code=stock_code, field_list=['SafeValue'])
+                if not info or not isinstance(info, dict):
+                    E("通达信 get_more_info 接口变更，请对比文档 https://help.tdx.com.cn/quant/docs/markdown/mindoc-1ctuhthaq5qmg/mindoc-1h3rtq1hij0ac.html#%E8%BF%94%E5%9B%9E%E6%95%B0%E6%8D%AE 后更新代码再试", stock=stock_code, 异常=f"{info}")
+                    return
+
+                safe_value = int(info.get('SafeValue', 0))
+                slb_summary = risk_summaries_by_code.get(stock_code, None) # type: Optional[SLBDetail]
+                if slb_summary:
+                    slb_value = 100 - int(slb_summary.total_risk_score)
+                else:
+                    continue
+
+                if safe_value == slb_value:
+                    stocks_schedule.pop(stock_code, None) # 剔除分数一致的股票
+                else:
+                    I("🚧 对比安全分后，需处理：", 股票代码=stock_code, 通达信分数=safe_value, 扫雷宝分数=slb_value)
+
+            I("🚧 对比安全分后，需处理：", 股票总数=len(stocks_schedule))
+
+        elif step_NI == 4: # 下载 -------------------------------------------------------------------------------------------------------------
             for _, stock_code in enumerate_with_progress(stocks_schedule.keys(), task_name=step_name):
                 json_filename = f'SLB.{stock_code}.json'
                 json_filepath = os.path.join(output_dir, json_filename)
@@ -411,7 +447,7 @@ def main(
                     for _, record in enumerate_with_progress(today_records, display_name_func=lambda d: f"{d.InstrumentID} {d.name}"):
                         slb_score = 100 - record.total_risk_score
                         slb_score = max(1, min(100, slb_score)) # 确保在1-100范围内
-                        
+
                         # DEBUG: 由于通达信自定义字段在板块列表中以字符串格式排序，导致降序排列时，100分（1开头）反而会排在90之后（9开头），
                         # 所以：字符格式保留 3位整数，不保留小数，前面补零，如 001, 023, 100
                         slb_score_str = f"{int(slb_score):03d}"
