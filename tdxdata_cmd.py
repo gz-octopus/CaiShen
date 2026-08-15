@@ -3356,7 +3356,7 @@ def user_sector(
                 _CSL.print(Pretty(st_stocks, max_length=max_to_show) if max_to_show > 0 else st_stocks)
 
 
-        elif action == 'clear':
+        elif action == 'clear' or action == 'delete':
             filtered_sectors = []
             if abbrev:
                 filtered_sectors.extend([{'Code': c, 'Name': n} for c, n in sectors_code2name.items() if abbrev in c])
@@ -3374,8 +3374,9 @@ def user_sector(
                 # 定义选项以及它们对应的值
                 choices = {"y": "yes", "n": "no", "a": "all"}
                 # 获取用户输入, 并验证它是否在我们定义的选项内
+                action_tip = "清空" if action == 'clear' else "删除"
                 answer = click.prompt(
-                    f"删除板块 {name} ? (y/n/a)",
+                    f"确定要{action_tip}板块 {name} ? ",
                     type=click.Choice(list(choices.keys()), case_sensitive=False),
                     default="n", show_choices=True
                 )
@@ -3384,16 +3385,15 @@ def user_sector(
                     click.secho("用户取消操作. ", fg="red")
                     return
                 elif answer == "y" or clear_all:
-                    tq.delete_sector(block_code=code)
-                    click.secho("♻️ 成功删除自定义板块", fg="green")
-                    # 这里执行单个任务的逻辑
+                    if action == 'delete':
+                        tq.delete_sector(block_code=code)
+                    elif action == 'clear':
+                        tq.clear_sector(block_code=code)
+                    click.secho(f"♻️ 成功{action_tip}自定义板块中的个股", fg="green")
                 elif answer == "a":
                     _CSL.print("⚠️ 接下来删除余下的自定义板块", fg="yellow")
                     clear_all = True
 
-                click.confirm(f"确定要清空自定义板块【代码：{code} 名称：{name}】中的个股吗？", abort=True)
-
-                _CSL.print(f"已清空自定义板块【代码：{code} 名称：{name}】中的个股")
 
         elif action == 'diff':
             # ── 解析板块1 ──
@@ -4777,3 +4777,4 @@ def filter_to_block(_ctx: click.Context,
     _ctx.invoke(user_sector, action='create', name=to_block_name, stocks=list(stocks))
 
     _CSL.print(f"\n✅ 完成！板块 [yellow]{to_block_name}[/yellow] 共 [green]{len(stocks)}[/green] 只个股")
+
