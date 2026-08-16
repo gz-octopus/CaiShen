@@ -16,7 +16,7 @@
 - **执行覆盖（Notes override）**：本 effort 不止出决策——「第一闭环」（数据→因子→策略→回测→报告最小通路）作为落地执行包含在地图内，由后续开发会话执行；地图 ticket 只解决决策。
 - **会话惯例**：CaiShen 惯例（中文注释/文档、CLI 入口）；grilling 会话用 /grilling + /domain-modeling。
 - **路线图**：第一闭环（T1 定义）→ 系统骨架（T3）→ 报告（T5）→ 因子流水线（T7）→ 公式翻译器（T6，目的地一部分但不进第一闭环）。
-- **执行状态**：第一闭环已落地（2026-08-14，分支 first-loop）——`python -m strategy_research first-loop` 验收全过（T1 七条，含重跑逐位一致）；权息库 55,717 条 / 5,276 只已导入（stock.db 位于 strategy_research/data，gitignore）。
+- **执行状态**：第一闭环已落地（2026-08-14，分支 first-loop）——`python -m strategy_research first-loop` 验收全过（T1 七条，含重跑逐位一致）；权息库 55,717 条 / 5,276 只已导入（stock.db 位于 strategy_research/data，gitignore）。T4/T6/T7 已全部关闭（2026-08-14~16），frontier 为空；第二闭环（T7 定稿：因子流水线+组合回测+实验管理）待开发执行。
 
 ## Decisions so far
 
@@ -27,6 +27,7 @@
 - [系统代码组织与 CLI 骨架](tickets/T3-系统代码组织与CLI骨架.md) — 独立包 strategy_research/ 全自包含（代码+ini+data+reports 均在包内，根目录零新增；入口 python -m strategy_research，click 四子命令 check/backtest/report/first-loop）；config.yaml 新增 hikyuu 组；gitignore 包内 data/与 reports/；按需复用 difoss_stock_util（日志/表格），不引 REPL 框架；**配置读取改 yaml.safe_load 只读 hikyuu 组（执行修订：read_yaml_config 全文件 env 展开会失败）**；验收命令 = python -m strategy_research first-loop
 - [tdxquant 补充数据适配](tickets/T4-tdxquant补充数据适配.md) — 财务/板块/公式批量三接口实测可用；财务须客户端先下载专业财务数据（否则静默空），方案建议落库快照+PIT；板块选股池走内存列表；公式验证复权对齐 dividend_type=1↔FORWARD；strategy_research 按轻量直取模式独立封装，不 import tdxdata REPL
 - [公式翻译器子集原型](tickets/T6-公式翻译器子集原型.md) — 技术方案验证成立：300 行原型（词法+递归下降+映射生成）；翻译的 MA 金叉公式与第一闭环 SG_Cross 金叉日 30/30 完全一致；hikyuu 顶层 418 符号 TDX 兼容面宽（翻译核心是解析+映射）；正式模块化（strategy_research/translator.py）待 T7 需要时
+- [因子研究流水线接入](tickets/T7-因子研究流水线接入.md) — 第二闭环定稿：两层资产管理（factors/+strategies/ 纯代码，不做 spec）+ 统一 backtest.py（单标的=池1特例，删 first-loop）+ experiments/ 运行 config + SQLite 实验注册表；5 技术因子等权合成+Zscore+TopN10+月度首个交易日调仓；factor 命令出 IC/ICIR/10 层分层 html 评估报告；七条验收含第一闭环逐位一致迁移验证；财务因子第一版不做
 - [报告层设计](tickets/T5-报告层设计.md) — 自算年化夏普（get_funds_curve 日收益×√252）+最大回撤（MDD 指标×**自实现算法**交叉验证——执行修订：get_max_pull_back 在 2.8.1 恒返回 0.0 不可用）；绘图=matplotlib（hikyuu 原生引擎，tm.performance 绑定方法打底；echarts 出局：2.8.1 缺陷+无 TM 绩效；引擎可插拔留 T7）；html=jinja2 单文件自包含（base64 内嵌，固定名 first_loop_report.html，--output 可指定）；6 区块布局含 T+1 偏差声明；坑：crtTM 构造 + import hikyuu 前 Agg + DATE 查询 end exclusive + get_funds_curve 须传 dates
 
 ## Not yet specified
@@ -54,6 +55,6 @@
 | [T4](tickets/T4-tdxquant补充数据适配.md) | tdxquant 补充数据适配 | research | **closed** | T1 |
 | [T5](tickets/T5-报告层设计.md) | 报告层设计 | grilling | closed | T1 |
 | [T6](tickets/T6-公式翻译器子集原型.md) | 公式翻译器子集原型 | prototype | **closed** | T1 |
-| [T7](tickets/T7-因子研究流水线接入.md) | 因子研究流水线接入 | grilling | open | T1, T5 |
+| [T7](tickets/T7-因子研究流水线接入.md) | 因子研究流水线接入 | grilling | **closed** | T1, T5 |
 
-**frontier（可认领）**：T7
+**frontier（可认领）**：（空）——全部 ticket 已关闭，进入第二闭环执行阶段
