@@ -1,0 +1,8 @@
+# 第一闭环回归实验：单标的 MA(10)/MA(30) 金叉择时（组合范式表达）
+# 运行：python -m strategy_research backtest -c strategy_research/experiments/ma_cross.yaml --report
+# 验收基线（迁移验证，须逐位一致）：60 笔交易、期末资产 822621.31、
+# 夏普 -0.2224289778、MDD 34.68696762
+strategy: ma-cross
+start: '2020-01-02'
+end: '2026-08-13'
+init_cash: 1000000

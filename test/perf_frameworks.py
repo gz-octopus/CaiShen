@@ -149,16 +149,20 @@ def run_vectorbt(close: pd.DataFrame) -> None:
 
 def run_hikyuu(close: pd.DataFrame, preloaded: bool = True) -> None:
     import hikyuu as hku
-    from strategy_research.strategy import create_system
 
     for code in close.columns:
         stk = hku.sm[code]
         q = hku.Query(hku.Datetime(2020, 1, 2), hku.Datetime(2026, 8, 14),
                       hku.Query.DAY, recover_type=hku.Query.FORWARD)
+        proto = hku.SYS_Simple(
+            sg=hku.SG_Cross(hku.MA(hku.CLOSE(), n=MA_FAST), hku.MA(hku.CLOSE(), n=MA_SLOW)),
+            mm=hku.MM_FixedPercent(0.99), sp=hku.SP_FixedPercent(0.001))
+        se = hku.SE_Fixed([stk], proto)
         tm = hku.crtTM(date=hku.Datetime(2020, 1, 2), init_cash=1_000_000,
                        cost_func=hku.TC_FixedA2017(), name=f't_{code}')
-        sys_ = create_system(tm)
-        sys_.run(stk, q)
+        pf = hku.PF_Simple(tm=tm, se=se, af=hku.AF_EqualWeight(),
+                           adjust_cycle=1, adjust_mode='query')
+        pf.run(q)
 
 
 # ---------------------------------------------------------------- 主流程

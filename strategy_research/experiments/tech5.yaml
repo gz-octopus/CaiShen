@@ -1,0 +1,14 @@
+# 第二闭环基线组合实验：五因子等权月度组合（TopN 截面选股）
+# 运行：python -m strategy_research backtest -c strategy_research/experiments/tech5.yaml --report
+strategy: tech5
+topn: 10
+mf: equal-weight        # equal-weight | icir-weight
+norm: zscore            # zscore | quantile-uniform | minmax | nothing
+adjust_mode: month
+adjust_cycle: 1         # 每月首个交易日调仓
+start: '2020-01-02'
+end: '2026-08-13'
+init_cash: 1000000
+exclude_st: true
+min_listed_days: 60
+min_active_days: 20

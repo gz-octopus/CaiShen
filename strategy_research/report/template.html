@@ -54,7 +54,9 @@
     <h1>{{ meta.strategy_name }}</h1>
     <div class="sub">{{ meta.strategy_desc }}</div>
     <div class="meta-grid">
-      <div><b>标的：</b>{{ meta.stock_code }}（{{ meta.stock_name }}）</div>
+      <div><b>模式：</b>{{ '截面组合' if meta.mode == 'portfolio' else '单标的择时' }}</div>
+      <div><b>股票池：</b>{{ meta.stock_count }} 只</div>
+      {% if meta.adjust_mode %}<div><b>调仓：</b>{{ meta.adjust_mode }}:{{ meta.adjust_cycle }}</div>{% endif %}
       <div><b>回测区间：</b>{{ meta.start }} ~ {{ meta.end }}</div>
       <div><b>复权口径：</b>{{ meta.recover_type }}</div>
       <div><b>初始资金：</b>{{ '{:,.0f}'.format(meta.init_cash) }} 元</div>
@@ -103,25 +105,47 @@
     </table>
   </section>
 
-  <!-- 区块 6 · 交易明细表 -->
+  <!-- 区块 6 · 调仓明细（组合模式） -->
+  {% if is_portfolio %}
+  <section>
+    <h2>调仓明细（{{ rebalance_rows|length }} 次）</h2>
+    <div class="trades-wrap">
+      <table>
+        <thead>
+          <tr><th>调仓日</th><th>入选数</th><th>入选标的（代码|权重）</th></tr>
+        </thead>
+        <tbody>
+        {% for rb in rebalance_rows %}
+          <tr>
+            <td>{{ rb.date }}</td>
+            <td>{{ rb.count }}</td>
+            <td style="text-align:left">{{ rb.stocks }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- 区块 7 · 交易明细表 -->
   <section>
     <h2>交易明细（{{ trades|length }} 条）</h2>
     <div class="trades-wrap">
       <table>
         <thead>
-          <tr><th>日期</th><th>方向</th><th>计划价</th><th>成交价</th><th>数量</th><th>费用合计</th><th>佣金</th><th>印花税</th><th>现金余额</th></tr>
+          <tr><th>日期</th><th>标的</th><th>方向</th><th>计划价</th><th>成交价</th><th>数量</th><th>费用合计</th><th>现金余额</th></tr>
         </thead>
         <tbody>
         {% for t in trades %}
           <tr>
             <td>{{ t.datetime }}</td>
+            <td>{{ t.stock }}</td>
             <td>{{ t.business }}</td>
             <td>{{ '%.4f'|format(t.plan_price) }}</td>
             <td>{{ '%.4f'|format(t.real_price) }}</td>
             <td>{{ '%.0f'|format(t.number) }}</td>
             <td>{{ '%.2f'|format(t.cost_total) }}</td>
-            <td>{{ '%.2f'|format(t.cost_commission) }}</td>
-            <td>{{ '%.2f'|format(t.cost_stamptax) }}</td>
             <td>{{ '%.2f'|format(t.cash) }}</td>
           </tr>
         {% endfor %}
