@@ -2602,6 +2602,90 @@ def stock_stat(_ctx: click.Context,
 
 
 # ---------------------------------------------------------------------------------------------
+# 自定义板块多日买入盈亏统计（等价于对多个交易日循环执行 gus | ss）
+@click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('-k', '--keys', 'keys', multiple=True, callback=split_comma,
+              help='指定自定义板块包含字符串（可多选，逗号分隔），如 -k 可买入')
+@click.option('-bt', '--begin-date', 'begin_date', type=DATETIME, default=None,
+              help='开始日期（默认：最近一个交易日）')
+@click.option('-et', '--end-date', 'end_date', type=DATETIME, default=None,
+              help='结束日期（默认：最近一个交易日）')
+@click.option('-dl', '--daily', 'daily', is_flag=True,
+              help='逐日输出模式：从买入日起每一天输出一个持仓盈亏 DataFrame')
+@click.option('-c', '--count', 'count_n', type=int, default=0, show_default=True,
+              help='逐日输出模式：显示买入日收盘后 N 个交易日的盈亏（隐含 -dl）')
+@click.pass_context
+def user_block_stat(_ctx: click.Context,
+    keys: list[str],
+    begin_date: datetime | None,
+    end_date: datetime | None,
+    daily: bool,
+    count_n: int,
+):
+    """统计自定义板块在多个交易日买入后的持仓盈亏
+
+    等价于对 begin-date ~ end-date 之间的每个交易日循环执行：
+        gus -c {key}.{交易日} | ss -c N
+
+    使用示例：
+        ubs -k 可买入 -bt 20260803 -c 1
+            → gus -c 可买入.20260803 | ss -c1
+              gus -c 可买入.20260804 | ss -c1
+              ... （每个交易日一条）
+        ubs -k 可买入,涨停票 -bt 20260803 -et 20260810 -c 2
+    """
+    _CSL = _ctx.obj['console']  # type: Console
+
+    # ── 日期范围 ──
+    if begin_date is None:
+        begin_date = calc_belong_trading_day(datetime.now(), dividing_line=datetime_time(9, 30, 0))
+    if end_date is None:
+        end_date = calc_belong_trading_day(datetime.now(), dividing_line=datetime_time(9, 30, 0))
+    if isinstance(begin_date, datetime):
+        begin_date = begin_date.date()
+    if isinstance(end_date, datetime):
+        end_date = end_date.date()
+    if begin_date > end_date:
+        _CSL.print(f"[red]begin-date ({begin_date}) 晚于 end-date ({end_date})[/red]")
+        return
+
+    # ── 生成交易日列表（自然日递增，仅保留交易日）──
+    from difoss_stock_util.stock_util import is_trading_day
+    trading_days = []
+    d = begin_date
+    while d <= end_date:
+        if is_trading_day(d):
+            trading_days.append(d)
+        d += timedelta(days=1)
+    if not trading_days:
+        _CSL.print(f"[red]区间 {begin_date} ~ {end_date} 内无交易日[/red]")
+        return
+
+    mode_label = f"逐日 N={count_n}" if count_n > 0 else ("逐日全部" if daily else "汇总")
+    _CSL.print(f"\n[bold]📊 自定义板块逐日买入盈亏统计[/bold]\n"
+               f"  板块关键词: [yellow]{keys}[/yellow]\n"
+               f"  日期区间: [yellow]{begin_date} ~ {end_date}[/yellow]"
+               f"（共 [green]{len(trading_days)}[/green] 个交易日）\n"
+               f"  输出模式: [yellow]{mode_label}[/yellow]")
+
+    # ── 逐交易日执行 gus + ss ──
+    for i, day in enumerate(trading_days):
+        day_str = day.strftime('%Y%m%d')
+        for key in keys:
+            block_name = f"{key}.{day_str}"
+            _CSL.print(f"\n[bold cyan]▶ [{i+1}/{len(trading_days)}] 板块 [yellow]{block_name}[/yellow][/bold cyan]")
+            # 等价于 gus -c {block_name}
+            result = _ctx.invoke(get_user_sector, contains=[block_name], cache_stocks=True)
+            stocks = result.get('stocks', set()) if isinstance(result, dict) else set()
+            if not stocks:
+                _CSL.print("[dim]  该板块无个股，跳过[/dim]")
+                continue
+            # 等价于 ss -c N（date=买入日）
+            _ctx.invoke(stock_stat, stocks=list(stocks), date=day,
+                        daily=daily or count_n > 0, count_n=count_n)
+
+
+# ---------------------------------------------------------------------------------------------
 # 主力资金流筛选
 @click.command(context_settings={'help_option_names': ['-?', '--help', '-h']})
 @stocks_collector
@@ -3493,13 +3577,15 @@ def get_trading_dates(
 @click.option('--count', '-c', 'count',  default=20, type=int, help='获取数据条数（最大值为24000，count为-1时为获取对应股票全部K线）')
 @click.option('--period', '-p', 'period', default='1d', type=click.Choice(ALL_PERIODS), show_default=True, help='K线周期')
 @click.option('--dividend-type', '-d', 'dividend_type', default=1, show_default=True, help='0不复权 1前复权 2后复权')
-@click.option('--name', '-n', 'name', help='公式名称（空时列出所有可用的公式名称供参考，-l 参数时可用于查找）')
+@click.option('--name', '-n', 'name', help='公式名称（空时列出所有可用的公式名称供参考）')
+@click.option('--key', '-k', 'keys', multiple=True, callback=split_comma,
+              help='按关键字筛选公式名称（acCode/acName 含任一 key 即命中，可多选；指定后 -l/--list-all 默认开启）')
 @click.option('--arg', '-a', 'args', multiple=True, callback=split_comma, help='公式参数（多个以逗号分隔，或者用多个参数带入）')
 @click.option('--xsflag', '-x', 'xs_flag', type=int, default=0, help='数据精度（最大可返回8位小数。）')
 @click.option('--max-to-show', '-max', 'max_to_show', default=300, show_default=True, type=int, help='最多显示多少条数据')
 @click.option('--verbose', '-v', 'verbose', is_flag=True, help='详细模式')
 # 2026-05-22 新接口: formula_get_all, formula_get_info
-@click.option('--list-all', '-l', 'list_all', is_flag=True, help='列出所有可用的公式名称')
+@click.option('--list-all', '-l', 'list_all', is_flag=True, help='列出所有可用的公式名称（指定 -k/--key 时自动开启）')
 # 2026-6-30 新参数：字段过滤，用于筛选输出指标列名（替代原来的 --keep-output）
 @click.option('--field-exclusion', '-fe', 'field_exclusions', multiple=True, callback=split_comma,
               help='需要从输出中剔除的指标列名（可多选）')
@@ -3529,6 +3615,7 @@ def formula(
     period: str,
     dividend_type: int,
     name: str,
+    keys: list[str],
     args: list[str],
     xs_flag: int,
     max_to_show: int,
@@ -3562,10 +3649,6 @@ def formula(
     _CFG = _ctx.obj['cfg']  # type: dict
     _is_pipe_producer = _ctx.obj.get('_pipe_producer', False)
 
-    if not stocks:
-        _CSL.print("⚠️ 股票列表为空，请使用 -s/--stock （或在 memory-cache 命令中缓存）指定。")
-        return
-
     _ft_name = {
         'zb': '技术指标',
         'xg': '条件选股',
@@ -3580,20 +3663,24 @@ def formula(
     _is_exp = (formula_type == 'exp')
 
     try:
-        if list_all or not name:
-            # 当没有指定公式名称时，列出所有可用的公式名称供用户参考
+        if list_all or not name or keys:
+            # 当没有指定公式名称（或指定 -k/--key）时，列出匹配的公式名称供用户参考
             res = tq.formula_get_all(formula_type=_ft_int)
 
             total_formula_num = len(res) if res and isinstance(res, list) else 0
 
-            if name:
-                # 筛选 acCdoe, acName 中包含 name 字符串的公式
-                res = [x for x in res if name in x.get('acCode', '') or name in x.get('acName', '')]
+            if keys:
+                # 按关键字筛选：acCode/acName 包含任一 key 即命中（可多选）
+                res = [x for x in res
+                       if any(k in x.get('acCode', '') or k in x.get('acName', '') for k in keys)]
 
             _all_formula_df = pd.DataFrame(res)
 
-            title = f"所有{('含有 [yellow]' + name + '[/yellow] 的') if name else ''} {_ft_name} 公式"
-            if name:
+            if keys:
+                title = f"公式名含 [yellow]{','.join(keys)}[/yellow] 的 {_ft_name} 公式"
+            else:
+                title = f"所有{('含有 [yellow]' + name + '[/yellow] 的') if name else ''} {_ft_name} 公式"
+            if name or keys:
                 title += f"（共 {len(res)} / {total_formula_num} 个）"
 
             if res:
@@ -3609,6 +3696,10 @@ def formula(
                     _CSL.print(f"{_ft_name} 公式 {_f_name}（{_f_code}）的详细信息:")
                     _CSL.print(Pretty(formula_detail_info))
 
+            return
+        
+        if not stocks:
+            _CSL.print("⚠️ 股票列表为空，请使用 -s/--stock （或在 memory-cache 命令中缓存）指定。")
             return
 
         # ── 阶段2: 请求参数准备 ──
