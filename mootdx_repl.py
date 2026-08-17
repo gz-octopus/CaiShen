@@ -141,14 +141,52 @@ def get_market_data(
     try:
         std_client = _ctx.obj['std_client'] # type: StdQuotes
         for full_code in stocks:
-            # TODO:
-            feed = std_client.bars(symbol=full_code, frequency=frequency, start=start, offset=count, adjust=adjust)
+            # mootdx 底层 get_security_bars 需要纯6位代码（不能带 .SH/.SZ 后缀），
+            # 否则服务器无法识别 → 返回空数据
+            short_code = SecurityCode(full_code).short_code
+            feed = std_client.bars(symbol=short_code, frequency=frequency, start=start, offset=count, adjust=adjust)
 
             if show_table:
                 print_dataframe(feed, title=f"股票数据 {full_code} （{period}）K线数据",
                                 show_footer=True, printer=_CSL.print)
             else:
                 _CSL.print(f"股票数据 {full_code} （{period}）K线数据:\n{feed}")
+    except Exception as e:
+        _CSL.print_exception(extra_lines=5, show_locals=True)
+
+
+@click.command(short_help="获取实时行情", context_settings={'help_option_names': ['-?', '--help', '-h']})
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS,
+              help='股票代码列表 (如: 688318.SH)，可多只，逗号分隔')
+@click.option('--table/-no-table', '-t/-nt', 'show_table', is_flag=True, default=True,
+              help='是否以表格显示结果（默认：是）')
+@click.pass_context
+def get_quotes(_ctx: click.Context,
+    stocks: list[str],
+    show_table: bool,
+):
+    """获取股票实时行情（最新价/涨跌幅/成交量等盘口快照）
+
+    mootdx 实时行情接口 StdQuotes.quotes(symbol=[...])，
+    symbol 需为纯6位代码（如 000001/600300），不支持 .SH/.SZ 后缀。
+    """
+    _CSL = _ctx.obj['console']  # type: Console
+
+    try:
+        std_client = _ctx.obj['std_client']  # type: StdQuotes
+        # 剥离 .SH/.SZ 后缀 → 纯6位代码
+        short_codes = [SecurityCode(code).short_code for code in stocks]
+        feed = std_client.quotes(symbol=short_codes)
+
+        if feed is None or feed.empty:
+            _CSL.print("[yellow]未获取到实时行情数据（可能当前非交易时段或无数据）[/yellow]")
+            return
+
+        if show_table:
+            print_dataframe(feed, title=f"实时行情（{len(short_codes)} 只）",
+                            show_footer=True, printer=_CSL.print)
+        else:
+            _CSL.print(f"实时行情:\n{feed}")
     except Exception as e:
         _CSL.print_exception(extra_lines=5, show_locals=True)
 

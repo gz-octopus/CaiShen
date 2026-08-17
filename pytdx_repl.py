@@ -37,6 +37,21 @@ ALL_MARKET_LIST = ['SH', 'SZ']
 ALL_SECURITY_TYPE_LIST = SecurityType.allows()
 ALL_SECURITY_TYPE_CN_LIST = SecurityType.allows_cn()
 
+PERIOD_2_CATEGORY = {
+    '1m': Api.KLineCategory.K1, # 1分钟线
+    '5m': Api.KLineCategory.K5, # 5分钟线
+    '15m': Api.KLineCategory.K15, # 15分钟线
+    '30m': Api.KLineCategory.K30, # 30分钟线
+    '60m': Api.KLineCategory.K60, # 60分钟线
+    '1d': Api.KLineCategory.KDay, # 日线
+    '1q': Api.KLineCategory.KSeason, # 季度线
+    '1y': Api.KLineCategory.KYear, # 年线
+    '1w': Api.KLineCategory.KWeek, # 周线
+    '1mon': Api.KLineCategory.KMonth, # 月线
+}
+
+PERIODS = list(PERIOD_2_CATEGORY.keys())
+
 # 可使用 -ping 功能调用 select_best_ip() 获取最佳 IP:PORT
 STOCK_IP = 'sztdx.gtjas.com'
 FUTURE_IP = '112.74.214.43'
@@ -148,7 +163,7 @@ def get_k_data(_ctx: click.Context, stocks: list[str],
     global CFG, CONSOLE
     start_date_str = start_date.strftime('%Y-%m-%d') if (start_date and isinstance(start_date, datetime.datetime)) else ''
     end_date_str = end_date.strftime('%Y-%m-%d') if (end_date and isinstance(end_date, datetime.datetime)) else ''
-    
+
     print_locals()
 
     hq_api = _ctx.obj.get('hq_api', None) # type: TdxHq_API
@@ -172,9 +187,11 @@ def get_k_data(_ctx: click.Context, stocks: list[str],
 @click.command(context_settings=dict(help_option_names=['-?', '--help', '-h']))
 @click.pass_context
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS, help='股票代码列表 (如: 000001.SZ)')
+@click.option('--verbose', '-v', 'verbose', is_flag=True, help='显示详细信息')
 def get_security_quotes(
     _ctx: click.Context,
-    stocks: list[str]
+    stocks: list[str],
+    verbose: bool,
     ):
     """获取五档行情"""
     global CFG, CONSOLE
@@ -185,10 +202,39 @@ def get_security_quotes(
         quotes = hq_api.get_security_quotes(code_tuples)
         df = hq_api.to_df(quotes)
         df = df.loc[:, (df != 0).any(axis=0)] # 删除 df 中 value 全部是 0 的列
-        print_dataframe(df, title="五档行情数据")
+        if verbose:
+            CONSOLE.print(df)
+        else:
+            print_dataframe(df, title="五档行情数据")
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
 
+
+@click.command(context_settings=dict(help_option_names=['-?', '--help', '-h']))
+@click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS, help='股票代码列表 (如: 000001.SZ)')
+@click.option('--period', '-p', 'period', type=click.Choice(PERIOD_2_CATEGORY.keys()), default='1d', help='周期')
+@click.option('--start', '-st', 'start', type=int, default=0, help='起始第几根K')
+@click.option('--count', '-c', 'count', type=int, default=100, help='数量')
+@click.pass_context
+def get_security_bars(
+    _ctx: click.Context,
+    stocks: list[str],
+    period: str,
+    start: int,
+    count: int,
+):
+    """获取K线数据（在线）"""
+    global CFG, CONSOLE
+    hq_api = _ctx.obj.get('hq_api', None) # type: TdxHq_API
+    try:
+        for stock in stocks:
+            code = SecurityCode(stock)
+            bar = hq_api.get_security_bars(category=PERIOD_2_CATEGORY[period],
+                                     market=get_market_enum(code.market_code).value,
+                                     code=code.short_code, start=start, count=count)
+            CONSOLE.print(bar)
+    except Exception as e:
+        CONSOLE.print_exception(extra_lines=5, show_locals=True)
 
 # ---------------------------------------------------------------------------------------------------
 @click.command(context_settings=dict(help_option_names=['-?', '--help', '-h']))
@@ -219,7 +265,7 @@ def get_security_list(
             print_dataframe(df, title=f"{market} 股票列表")
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
-        
+
 
 @command_with_abbrev(abbrev='cqcx', context_settings={'help_option_names': ['-?', '--help', '-h']})
 @click.option('--stock', '-s', 'stocks', multiple=True, callback=split_comma_stocks, default=STOCKS, help='股票代码列表 (如: 000001.SZ)')
@@ -261,6 +307,7 @@ def connect(_ctx: click.Context,
     ):
     """连接服务器"""
     global CONSOLE, STOCK_IP, STOCK_PORT
+    print_locals(printer=CONSOLE.print)
 
     _ctx.ensure_object(dict)
 
@@ -301,11 +348,11 @@ def init(_ctx: click.Context):
         hq_api = TdxHq_API(multithread=True)
         hq_api.connect(ip=STOCK_IP, port=STOCK_PORT)
         _ctx.obj['hq_api'] = hq_api
-        
+
         click.echo("✅ 行情API初始化成功")
     except Exception as e:
         CONSOLE.print_exception(extra_lines=5, show_locals=True)
 
 
 if __name__ == '__main__':
-    repl_cli_main(on_init=init, console=CONSOLE)
+    repl_cli_main(on_init=init, prompt='pytdx> ', console=CONSOLE)
