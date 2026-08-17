@@ -15,7 +15,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# 仓库根加入 sys.path（本文件在 strategy_research/_selfcheck/ 下，需上溯三级）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from strategy_research import config as cfg_mod
 from strategy_research.backtest import EXPERIMENTS_DB, run_backtest
@@ -89,15 +90,15 @@ def main():
           '当前总资产' in d1['stats'] and len(d1['stats']) == 53,
           f"(stats {len(d1['stats'])} 项)")
 
-    # ---- 验收 6：实验注册表 ----
+    # ---- 验收 6：实验记录表 ----
     con = sqlite3.connect(str(EXPERIMENTS_DB))
-    rows = con.execute('select id, strategy, mode, params, git_commit, out_dir from runs '
+    rows = con.execute('select id, strategy, mode, params, out_dir from runs '
                        'order by id').fetchall()
     con.close()
     ma_rows = [r for r in rows if r[1] == 'ma-cross']
     ok6 = len(rows) >= 2 and any(r[1] == 'tech5' for r in rows) \
         and all(r[3] and r[4] for r in rows)
-    check('验收6 实验注册表记录（参数快照+commit+路径）', ok6,
+    check('验收6 实验记录表（参数快照+产物路径）', ok6,
           f"(runs {len(rows)} 条, ma-cross {len(ma_rows)} 条)")
 
     # ---- 验收 7：T+1 声明 ----

@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-"""strategy_research 自算指标纯函数单测（T5 落地约束：回撤边角 case 覆盖）。
+"""strategy_research 自算指标纯函数单测（覆盖回撤边角 case）。
 
-运行：python test/test_strategy_research.py
+运行：python strategy_research/_selfcheck/test_strategy_research.py
 """
 import math
 import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# 仓库根加入 sys.path（本文件在 strategy_research/_selfcheck/ 下，需上溯三级）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from strategy_research.report import calc_max_drawdown, calc_sharpe
 
