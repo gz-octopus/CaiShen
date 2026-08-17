@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>因子评估报告 — {{ start }} ~ {{ end }}</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1f2937; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #2563eb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: "Segoe UI", "Microsoft YaHei", sans-serif; line-height: 1.6; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+           padding: 20px 26px; margin-bottom: 20px; }
+  h1 { margin: 0 0 6px; font-size: 1.4rem; }
+  .sub { color: var(--muted); font-size: 0.9rem; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 18px 22px; margin-bottom: 20px; }
+  h2 { margin: 0 0 12px; font-size: 1.05rem; border-left: 4px solid var(--accent); padding-left: 10px; }
+  figure { margin: 0; text-align: center; }
+  figure img { max-width: 100%; height: auto; border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  th, td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: right; }
+  th { background: #f9fafb; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td:first-child, th:first-child { text-align: left; }
+  tbody tr:hover { background: #f3f6fd; }
+  footer { color: var(--muted); font-size: 0.8rem; text-align: center; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>因子评估报告</h1>
+    <div class="sub">评估区间 {{ start }} ~ {{ end }} ｜ 股票池 {{ stock_count }} 只 ｜
+      分层 {{ layers }} 层（日频分层口径：每日截面评分排序分层的等权日收益累计，
+      纯因子区分度展示，非调仓组合）｜ 生成于 {{ generated_at }}</div>
+  </header>
+
+  <!-- IC 序列图（全因子） -->
+  <section>
+    <h2>IC 序列（spearman，全区间）</h2>
+    <figure><img src="{{ ic_img }}" alt="IC 序列"></figure>
+  </section>
+
+  <!-- IC 统计表 -->
+  <section>
+    <h2>IC 统计</h2>
+    <table>
+      <thead><tr><th>因子</th><th>说明</th><th>方向</th><th>IC 均值</th><th>ICIR（年化）</th><th>正 IC 占比%</th><th>样本数</th></tr></thead>
+      <tbody>
+      {% for r in results %}
+        <tr>
+          <td>{{ r.name }}</td>
+          <td>{{ r.brief }}</td>
+          <td>{{ r.direction }}</td>
+          <td>{{ '%.4f'|format(r.stats.ic_mean) }}</td>
+          <td>{{ '%.2f'|format(r.stats.icir) }}</td>
+          <td>{{ '%.1f'|format(r.stats.ic_pos_ratio) }}</td>
+          <td>{{ r.stats.n }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 分层回测（每因子一张图 + 年化表） -->
+  {% for r in results %}
+  <section>
+    <h2>分层回测 — {{ r.name }}（{{ r.brief }}）</h2>
+    <figure><img src="{{ layer_imgs[loop.index0] }}" alt="分层收益"></figure>
+    <table>
+      <thead><tr><th>层</th>{% for i in range(layers) %}<th>L{{ i + 1 }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        <tr><td>年化收益</td>
+          {% for i in range(layers) %}
+          <td>{{ '%.2f%%'|format(r.layer_annual['L' ~ (i + 1)] * 100) }}</td>
+          {% endfor %}
+        </tr>
+      </tbody>
+    </table>
+  </section>
+  {% endfor %}
+
+  <footer>由 CaiShen strategy_research 生成 · {{ generated_at }}</footer>
+</div>
+</body>
+</html>

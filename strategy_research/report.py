@@ -101,6 +101,12 @@ def build_view(result: BacktestResult, result_dir: Path) -> dict:
     ]
     # 53 项统计表（保持 hikyuu 原始顺序）
     stat_rows = [{'name': k, 'value': v} for k, v in result.stats.items()]
+    # 调仓明细（组合模式；每条：日期 + 入选标的（代码|权重））
+    rebalance_rows = []
+    for rb in result.rebalances:
+        held = '、'.join(f'{c}({w:.2f})' for c, w in zip(rb['stocks'], rb['weights']))
+        rebalance_rows.append({'date': rb['date'], 'stocks': held,
+                               'count': len(rb['stocks'])})
     return {
         'meta': meta,
         'cards': cards,
@@ -108,6 +114,8 @@ def build_view(result: BacktestResult, result_dir: Path) -> dict:
         'drawdown_img': _png_to_base64(result_dir / cfg_mod.DRAWDOWN_PNG),
         'stat_rows': stat_rows,
         'trades': result.trades,
+        'rebalance_rows': rebalance_rows,
+        'is_portfolio': meta.get('mode') == 'portfolio',
         'max_drawdown_consistent': result.max_drawdown_consistent,
         'max_drawdown_mdd': result.max_drawdown_mdd,
         'max_drawdown_self': result.max_drawdown_self,
