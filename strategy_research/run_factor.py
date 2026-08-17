@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""因子评估执行器：IC/ICIR + 分层回测，出 html 评估报告。
+"""因子评估执行器：按 FACTOR_META.value_type 分流。
 
-- IC/ICIR：hikyuu mf.get_ic / get_icir（spearman，全区间序列）
-- 分层回测：mf.get_all_scores() 按日截面评分排序 → 剔除 NaN → 等分 N 层 →
-  各层等权日收益累计（日频分层口径：纯因子区分度展示，非调仓组合）
+- num 因子：IC/ICIR（hikyuu mf.get_ic / get_icir，spearman，全区间序列）+
+  分层回测（mf.get_all_scores() 按日截面评分排序 → 剔除 NaN → 等分 N 层 →
+  各层等权日收益累计；日频分层口径：纯因子区分度展示，非调仓组合），
+  出 factor_report.html（IC 序列图 + 统计表 + 分层累计收益图 + 各层年化表）
+- bool 因子（0/1 条件）：事件识别 + 事件后超额收益统计（见 run_event），
+  出 factor_forward_returns_report.html
 - 股票池：与回测同过滤规则（build_universe）
-- 输出：因子评估报告（IC 序列图 + 统计表 + 分层累计收益图 + 各层年化表）
 """
 from __future__ import annotations
 
@@ -16,11 +18,12 @@ import hikyuu as hku
 import numpy as np
 import pandas as pd
 
-from difoss_stock_util import I, P
+from difoss_stock_util import I, P, W
 
 from . import config as cfg_mod
 from . import factors
 from .backtest import build_universe
+from .run_event import build_price_matrix, render_event_report, study_events
 from .strategies import StrategyConfig
 
 FACTOR_REPORT_NAME = 'factor_report.html'
@@ -96,21 +99,14 @@ def run_factor(start: str | None = None, end: str | None = None, layers: int = 1
                       hku.Datetime(end_plus1.year, end_plus1.month, end_plus1.day),
                       hku.Query.DAY, recover_type=hku.Query.FORWARD)
 
-    # 全池前复权收盘矩阵（日收益用）。各股票按自身 K 线日期建 Series 再对齐
-    # （停牌股 K 线短于交易日历，直接按统一索引构造会长度不匹配）
-    series = {}
-    for stk in stks:
-        k = stk.get_kdata(query)
-        if len(k) > 0:
-            series[stk.market_code] = pd.Series(
-                [float(x.close) for x in k],
-                index=[str(d.date()) for d in k.get_datetime_list()])
-    close_df = pd.concat(series, axis=1)
-    close_df.index = pd.to_datetime(close_df.index)
+    # 全池前复权收盘矩阵（分层收益用；bool 型因子评估时另建开盘矩阵）
+    close_df = build_price_matrix(stks, query, 'close')
     I(f'收盘矩阵：{close_df.shape[1]} 只 × {close_df.shape[0]} 日')
 
     results = []
-    for name in factors.list_factors():
+    num_names = [n for n in factors.list_factors()
+                 if factors.FACTOR_META[n].get('value_type') != 'bool']
+    for name in num_names:
         ind = factors.build_factor(name).formula
         mf = _factor_mf(ind, stks, query)
         ic_ind = mf.get_ic(ndays=0)
@@ -141,60 +137,76 @@ def run_factor(start: str | None = None, end: str | None = None, layers: int = 1
           f'正 IC 占比 {stats["ic_pos_ratio"]:.1f}%')
 
     # 图表：IC 序列图 + 分层收益图（matplotlib → base64，多因子共一张图组）
-    from .report import _png_to_base64  # noqa: F401  复用 base64 工具
-    import base64
-    from io import BytesIO
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
-    matplotlib.rcParams['axes.unicode_minus'] = False
+    if results:
+        from .report import _png_to_base64  # noqa: F401  复用 base64 工具
+        import base64
+        from io import BytesIO
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        matplotlib.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+        matplotlib.rcParams['axes.unicode_minus'] = False
 
-    def _fig_to_b64(fig) -> str:
-        buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=110, bbox_inches='tight')
-        plt.close(fig)
-        return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
+        def _fig_to_b64(fig) -> str:
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=110, bbox_inches='tight')
+            plt.close(fig)
+            return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
 
-    # IC 序列图（分面）
-    n_f = len(results)
-    fig, axes = plt.subplots(n_f, 1, figsize=(12, 1.6 * n_f), sharex=True)
-    if n_f == 1:
-        axes = [axes]
-    for ax, r in zip(axes, results):
-        ax.plot([x['date'] for x in r['ic_series']], [x['value'] for x in r['ic_series']],
-                color='#2563eb', linewidth=0.6)
-        ax.axhline(0, color='#9ca3af', linewidth=0.5)
-        ax.set_title(f"{r['name']} — IC 均值 {r['stats']['ic_mean']:.4f} / "
-                     f"ICIR {r['stats']['icir']:.2f} / 正 IC 占比 {r['stats']['ic_pos_ratio']:.0f}%")
-    ic_img = _fig_to_b64(fig)
+        # IC 序列图（分面）
+        n_f = len(results)
+        fig, axes = plt.subplots(n_f, 1, figsize=(12, 1.6 * n_f), sharex=True)
+        if n_f == 1:
+            axes = [axes]
+        for ax, r in zip(axes, results):
+            ax.plot([x['date'] for x in r['ic_series']], [x['value'] for x in r['ic_series']],
+                    color='#2563eb', linewidth=0.6)
+            ax.axhline(0, color='#9ca3af', linewidth=0.5)
+            ax.set_title(f"{r['name']} — IC 均值 {r['stats']['ic_mean']:.4f} / "
+                         f"ICIR {r['stats']['icir']:.2f} / 正 IC 占比 {r['stats']['ic_pos_ratio']:.0f}%")
+        ic_img = _fig_to_b64(fig)
 
-    # 分层收益图（每因子一张，10 层曲线）
-    layer_imgs = []
-    for r in results:
-        fig, ax = plt.subplots(figsize=(10, 3.2))
-        cmap = plt.cm.RdYlGn
-        for i in range(layers):
-            key = f'L{i+1}'
-            ax.plot(r['layer_dates'], r['layer_curves'][key],
-                    color=cmap(i / (layers - 1)), linewidth=0.8, label=key)
-        ax.set_title(f"{r['name']} 分层累计净值（L1 最高分 … L{layers} 最低分）")
-        ax.grid(True, alpha=0.3)
-        ax.legend(ncol=layers, fontsize=7, loc='upper left')
-        layer_imgs.append(_fig_to_b64(fig))
+        # 分层收益图（每因子一张，10 层曲线）
+        layer_imgs = []
+        for r in results:
+            fig, ax = plt.subplots(figsize=(10, 3.2))
+            cmap = plt.cm.RdYlGn
+            for i in range(layers):
+                key = f'L{i+1}'
+                ax.plot(r['layer_dates'], r['layer_curves'][key],
+                        color=cmap(i / (layers - 1)), linewidth=0.8, label=key)
+            ax.set_title(f"{r['name']} 分层累计净值（L1 最高分 … L{layers} 最低分）")
+            ax.grid(True, alpha=0.3)
+            ax.legend(ncol=layers, fontsize=7, loc='upper left')
+            layer_imgs.append(_fig_to_b64(fig))
 
-    # html 渲染
-    from jinja2 import Environment, FileSystemLoader
-    env = Environment(loader=FileSystemLoader(str(TEMPLATE_PATH.parent)))
-    template = env.get_template(TEMPLATE_PATH.name)
-    html = template.render(
-        start=start, end=end, layers=layers,
-        stock_count=len(stks), generated_at=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
-        ic_img=ic_img, layer_imgs=layer_imgs, results=results)
-    out = config.report_dir / FACTOR_REPORT_NAME
-    out.write_text(html, encoding='utf-8')
-    I(f'因子评估报告生成：{out}（耗时 {time.time() - t0:.1f}s）')
-    return out
+        # html 渲染
+        from jinja2 import Environment, FileSystemLoader
+        env = Environment(loader=FileSystemLoader(str(TEMPLATE_PATH.parent)))
+        template = env.get_template(TEMPLATE_PATH.name)
+        html = template.render(
+            start=start, end=end, layers=layers,
+            stock_count=len(stks), generated_at=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+            ic_img=ic_img, layer_imgs=layer_imgs, results=results)
+        out = config.report_dir / FACTOR_REPORT_NAME
+        out.write_text(html, encoding='utf-8')
+        I(f'因子评估报告生成：{out}（耗时 {time.time() - t0:.1f}s）')
+    else:
+        W('无 num 型因子，跳过因子评估报告')
+        out = None
+
+    # bool 因子 → 事件研究（复用股票池与收盘矩阵，另建开盘矩阵）
+    event_path = None
+    bool_names = [n for n in factors.list_factors()
+                  if factors.FACTOR_META[n].get('value_type') == 'bool']
+    if bool_names:
+        open_df = build_price_matrix(stks, query, 'open')
+        ev_results = study_events(stks, query, open_df, close_df)
+        if ev_results:
+            event_path = render_event_report(ev_results, config, len(stks), start, end)
+        else:
+            W('bool 因子无事件样本，未生成事件报告')
+    return out, event_path
 
 
 def _f(v) -> float:

@@ -98,11 +98,13 @@ def backtest(exp_path, strategy, topn, mf, norm, adjust_mode, adjust_cycle,
 @click.option('--end', default=cfg_mod.DEFAULT_END, show_default=True, help='评估结束日期')
 @click.option('--layers', type=int, default=10, show_default=True, help='分层回测层数')
 def factor(start, end, layers):
-    """因子评估：IC/ICIR + 分层回测，出 html 评估报告。"""
+    """因子评估：按因子类型自动分流（num：IC/ICIR + 分层；bool：事件研究）。"""
     from .run_factor import run_factor
     try:
-        path = run_factor(start=start, end=end, layers=layers)
-        click.echo(f'因子评估报告已生成：{path}')
+        factor_path, event_path = run_factor(start=start, end=end, layers=layers)
+        for p in (factor_path, event_path):
+            if p:
+                click.echo(f'因子评估完成：{p}')
     except Exception:
         E('因子评估异常：')
         raise

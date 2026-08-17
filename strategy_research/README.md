@@ -15,13 +15,15 @@ CaiShen 仓库内的 A 股量化研究子系统（hikyuu 2.8.1 主架构）。�
 strategy_research/
 ├── __main__.py            CLI 入口（python -m strategy_research）
 ├── backtest.py            策略回测执行器：股票池过滤、执行、结果提取、落盘、写实验记录
-├── run_factor.py          因子评估执行器：IC/ICIR + 分层回测 + 评估报告
+├── run_factor.py          因子评估执行器：按 value_type 分流（num → IC/ICIR + 分层回测；bool → 事件研究）
+├── run_event.py           事件研究执行器：事件识别 → 事件后超额收益统计 + 报告
 ├── check.py               数据就绪校验（tdxw 进程 + 权息抽样）
 ├── config.py              配置加载 + hikyuu 初始化（含 matplotlib Agg 前置）
 ├── report.py              报告渲染（夏普/回撤纯函数 + jinja2 html）
 ├── factors/               因子库（资产统一放此目录，见下方「扩展新资产」）
 │   ├── __init__.py        因子登记处：FACTOR_BUILDERS（名称→构建函数）/ FACTOR_META（元数据）
-│   └── tech.py            具体因子实现--技术类因子
+│   ├── tech.py            数值型因子实现（num 型，价量可算）
+│   └── bool.py            bool 型因子实现（0/1 条件表达式）
 ├── strategies/            策略库（资产统一放此目录）
 │   ├── base.py            数据类（StrategyConfig/BuiltStrategy）与策略登记表
 │   ├── ma_cross.py        单标的 MA(10)/MA(30) 金叉择时
@@ -101,7 +103,7 @@ python -m strategy_research backtest -c strategy_research/experiments/ma_cross.y
 # 五因子组合回测 + 报告（全市场月度调仓）
 python -m strategy_research backtest -c strategy_research/experiments/tech5.yaml --report
 
-# 因子评估（IC/ICIR + 10 层分层，约 8 分钟）
+# 因子评估（按类型自动分流：num 因子 IC/ICIR + 分层约 8 分钟；bool 因子走事件研究）
 python -m strategy_research factor
 ```
 
@@ -111,7 +113,7 @@ python -m strategy_research factor
 |---|---|
 | `python -m strategy_research check` | 数据就绪校验（不通过拒绝回测） |
 | `python -m strategy_research backtest [选项]` | 统一回测 |
-| `python -m strategy_research factor [选项]` | 因子评估，出 html 评估报告 |
+| `python -m strategy_research factor [选项]` | 因子评估：num 因子出 IC/分层报告，bool 因子出事件研究报告 |
 | `python -m strategy_research report <结果目录> [-o 路径]` | 从落盘结果重新渲染报告 |
 
 ### backtest 选项
@@ -158,7 +160,7 @@ factors: []              # 因子子集（空 = 全部注册因子）
 
 ## 研究工作流（典型步骤）
 
-1. **选因子**：`factor` 命令评估全部注册因子的 IC/ICIR/分层收益，筛选有预测力的因子
+1. **选因子**：`factor` 命令按因子类型自动分流评估——num 因子出 IC/ICIR/分层收益，bool 因子出事件后超额收益统计
 2. **定实验**：把策略+因子子集+参数写成 `experiments/xxx.yaml`
 3. **跑回测**：`backtest -c experiments/xxx.yaml --report`，产物自动归档、实验记录自动登记
 4. **看报告**：report.html 六个区块（头部参数+T+1 声明/指标卡×6/资金曲线 vs 基准/回撤曲线/53 项统计/交易明细），组合模式多调仓明细区块
@@ -167,7 +169,13 @@ factors: []              # 因子子集（空 = 全部注册因子）
 
 ## 扩展新资产
 
-**新因子**：在 `factors/` 新建模块，函数返回 `hku.Factor(name, indicator, brief=...)`；然后在 `factors/__init__.py` 的 `FACTOR_BUILDERS` 字典里登记（名称 → 构建函数），并在 `FACTOR_META` 里登记元数据（direction：positive/negative/neutral）。**「因子注册」就是这个字典登记**——策略按名引用因子，CLI 校验存在性，登记后即对全部策略可用。
+**新因子**：在 `factors/` 新建模块，函数返回 `hku.Factor(name, indicator, brief=...)`；然后在 `factors/__init__.py` 的 `FACTOR_BUILDERS` 字典里登记（名称 → 构建函数），并在 `FACTOR_META` 里登记元数据：
+
+- `value_type`：`num`（数值型因子，走 IC/ICIR + 分层评估）或 `bool`（0/1 条件因子，走事件研究：事件识别 → 事件后超额收益统计）
+- `direction`：仅 num 因子（positive/negative/neutral，合成前的方向统一）
+- `brief`：因子说明
+
+**「因子注册」就是这个字典登记**——策略按名引用因子，CLI 校验存在性，登记后即对全部策略可用。
 
 **新策略**：在 `strategies/` 新建文件，实现 `build(cfg, stks) -> BuiltStrategy`（组装 MF/SE/SCF/AF/PF 组件，参考 tech5.py），在 `strategies/__init__.py` 的 `STRATEGY_BUILDERS` 字典登记 slug，`STRATEGY_META` 登记名称与描述。股票池过滤与执行由 backtest.py 统一负责，策略文件只写组装。
 
@@ -181,7 +189,7 @@ reports/20260817_tech5_t10_000007/
 └── drawdown.png            # 回撤曲线
 ```
 
-目录名 = `<日期>_<策略>_<参数标签>_<runid>`；`reports/factor_report.html` 为因子评估报告（固定名覆盖）。
+目录名 = `<日期>_<策略>_<参数标签>_<runid>`；`reports/factor_report.html` 为 num 因子评估报告、`reports/factor_forward_returns_report.html` 为事件研究报告（固定名覆盖）。
 
 
 ## 验收与测试
@@ -202,5 +210,5 @@ python strategy_research/_selfcheck/test_strategy_research.py # 单元测试：�
 | 3 | 换手率因子不可用 | TURNOVER/HSL 依赖流通股本（数据缺失），已用 20 日量比替代 |
 | 4 | 权息表为空 | 静默使用未复权价（高危），check 强制校验拒绝回测 |
 | 5 | 财务因子未启用 | 需客户端下载专业财务数据后接入 |
-| 6 | factor 命令耗时 | 全市场约 8 分钟（2583 只 × 5 因子） |
+| 6 | factor 命令耗时 | num 因子评估全市场约 8 分钟（2583 只 × 5 因子）；bool 事件研究另加开盘矩阵构建与事件统计 |
 | 7 | 成本缓冲 | 组合原型 MM_FixedPercent(0.99)：p=1.0 时买入金额+成本超现金被拒买 |
