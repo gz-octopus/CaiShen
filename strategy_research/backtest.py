@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime as _dt, timedelta
@@ -65,16 +64,6 @@ def _fmt_num(v) -> float:
         return float(v)
     except (TypeError, ValueError):
         return v
-
-
-def _git_commit() -> str:
-    """当前仓库 HEAD commit（复现性记录）。失败返回空串。"""
-    try:
-        out = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=str(cfg_mod.REPO_DIR),
-                             capture_output=True, text=True, timeout=10)
-        return out.stdout.strip()[:12] if out.returncode == 0 else ''
-    except Exception:
-        return ''
 
 
 def _tq_ctx():
@@ -201,7 +190,7 @@ def _registry_insert(cfg: StrategyConfig, mode: str, result: BacktestResult,
         con.execute(
             'CREATE TABLE IF NOT EXISTS runs ('
             'id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, strategy TEXT, mode TEXT,'
-            'params TEXT, git_commit TEXT, summary TEXT, out_dir TEXT)')
+            'params TEXT, summary TEXT, out_dir TEXT)')
         params = json.dumps(cfg.__dict__, ensure_ascii=False)
         summary = json.dumps({
             'sharpe': result.sharpe,
@@ -211,10 +200,10 @@ def _registry_insert(cfg: StrategyConfig, mode: str, result: BacktestResult,
             'annual_return': result.stats.get('帐户平均年收益率%'),
         }, ensure_ascii=False)
         cur = con.execute(
-            'INSERT INTO runs(ts, strategy, mode, params, git_commit, summary, out_dir)'
-            ' VALUES (?,?,?,?,?,?,?)',
+            'INSERT INTO runs(ts, strategy, mode, params, summary, out_dir)'
+            ' VALUES (?,?,?,?,?,?)',
             (_dt.now().strftime('%Y-%m-%d %H:%M:%S'), cfg.strategy, mode, params,
-             _git_commit(), summary, str(out_dir)))
+             summary, str(out_dir)))
         con.commit()
         return cur.lastrowid
     finally:
@@ -290,7 +279,6 @@ def run_backtest(cfg: StrategyConfig | None = None, config: cfg_mod.HikyuuConfig
             'adjust_cycle': cfg.adjust_cycle,
             't_plus_1_disclaimer': TPLUS1_DISCLAIMER,
             'generated_at': _dt.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'git_commit': _git_commit(),
             'hikyuu_version': hku.__version__ if hasattr(hku, '__version__') else '',
         },
         stats=stats,

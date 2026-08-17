@@ -56,5 +56,6 @@
 | [T5](tickets/T5-报告层设计.md) | 报告层设计 | grilling | closed | T1 |
 | [T6](tickets/T6-公式翻译器子集原型.md) | 公式翻译器子集原型 | prototype | **closed** | T1 |
 | [T7](tickets/T7-因子研究流水线接入.md) | 因子研究流水线接入 | grilling | **closed** | T1, T5 |
+| [T8](tickets/T8-因子策略版本管理.md) | 因子与策略的版本管理 | grilling | open | — |
 
-**frontier（可认领）**：（空）——全部 ticket 已关闭，进入第二闭环执行阶段
+**frontier（可认领）**：T8
