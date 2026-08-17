@@ -15,7 +15,7 @@ slb:
   user_diy_data_by_date: userdiydata_801_{date}.txt
 
 tdx:
-  base_dir: D:/finance_tool_/new_tdx
+  base_dir: ${TDX_ROOT}
 
 tushare:
   token: ${TUSHARE_TOKEN}
