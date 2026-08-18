@@ -114,8 +114,11 @@ def _row_nanmean(a: np.ndarray) -> np.ndarray:
 
 
 def study_events(stks: list, query: hku.Query, open_df: pd.DataFrame,
-                 close_df: pd.DataFrame) -> list[dict]:
-    """对全部 bool 型因子做事件识别与事件后收益统计，返回报告数据（不含图表）。"""
+                 close_df: pd.DataFrame, factor_name: str | None = None) -> list[dict]:
+    """对 bool 型因子做事件识别与事件后收益统计，返回报告数据（不含图表）。
+
+    factor_name 指定时只处理该因子，否则处理全部 bool 型因子。
+    """
     col_of = {c: i for i, c in enumerate(close_df.columns)}
     sh = hku.sm['sh000001']
     sh_open = build_price_matrix([sh], query, 'open').reindex(close_df.index)
@@ -124,6 +127,8 @@ def study_events(stks: list, query: hku.Query, open_df: pd.DataFrame,
     results = []
     for name in factors.list_factors():
         if factors.FACTOR_META[name].get('value_type') != 'bool':
+            continue
+        if factor_name and name != factor_name:
             continue
         factor = factors.build_factor(name)
         events = _identify_events(factor, stks, query)

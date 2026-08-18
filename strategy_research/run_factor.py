@@ -81,8 +81,12 @@ def _layer_returns(scores_by_date: list, close_df: pd.DataFrame, layers: int) ->
     return (1 + eq).cumprod()
 
 
-def run_factor(start: str | None = None, end: str | None = None, layers: int = 10) -> Path:
-    """因子评估主入口，输出 html 评估报告。"""
+def run_factor(start: str | None = None, end: str | None = None, layers: int = 10,
+               factor_name: str | None = None) -> Path:
+    """因子评估主入口，输出 html 评估报告。
+
+    factor_name 指定时只评估该因子，否则评估全部注册因子。
+    """
     t0 = time.time()
     config = cfg_mod.init_hikyuu()
     cfg_mod.ensure_dirs(config)
@@ -90,7 +94,14 @@ def run_factor(start: str | None = None, end: str | None = None, layers: int = 1
     end = end or cfg_mod.DEFAULT_END
     cfg = StrategyConfig(start=start, end=end)
 
-    P('====== 因子评估：IC/ICIR + 分层回测 ======')
+    all_names = factors.list_factors()
+    if factor_name:
+        if factor_name not in all_names:
+            raise KeyError(f'因子不存在: {factor_name}（可用：{", ".join(all_names)}）')
+        all_names = [factor_name]
+        P(f'====== 因子评估：{factor_name} ======')
+    else:
+        P('====== 因子评估：IC/ICIR + 分层回测 ======')
     stks = build_universe(cfg, end)
     I(f'股票池：{len(stks)} 只')
     from datetime import datetime, timedelta
@@ -104,7 +115,7 @@ def run_factor(start: str | None = None, end: str | None = None, layers: int = 1
     I(f'收盘矩阵：{close_df.shape[1]} 只 × {close_df.shape[0]} 日')
 
     results = []
-    num_names = [n for n in factors.list_factors()
+    num_names = [n for n in all_names
                  if factors.FACTOR_META[n].get('value_type') != 'bool']
     for name in num_names:
         ind = factors.build_factor(name).formula
@@ -197,11 +208,12 @@ def run_factor(start: str | None = None, end: str | None = None, layers: int = 1
 
     # bool 因子 → 事件研究（复用股票池与收盘矩阵，另建开盘矩阵）
     event_path = None
-    bool_names = [n for n in factors.list_factors()
+    bool_names = [n for n in all_names
                   if factors.FACTOR_META[n].get('value_type') == 'bool']
     if bool_names:
         open_df = build_price_matrix(stks, query, 'open')
-        ev_results = study_events(stks, query, open_df, close_df)
+        ev_results = study_events(stks, query, open_df, close_df,
+                                  factor_name=factor_name if factor_name else None)
         if ev_results:
             event_path = render_event_report(ev_results, config, len(stks), start, end)
         else:

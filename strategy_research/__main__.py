@@ -94,14 +94,17 @@ def backtest(exp_path, strategy, topn, mf, norm, adjust_mode, adjust_cycle,
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
+@click.option('--factor', '-f', 'factor_name', default=None,
+              help='只评估指定因子（不指定则评估全部）')
 @click.option('--start', default=cfg_mod.DEFAULT_START, show_default=True, help='评估起始日期')
 @click.option('--end', default=cfg_mod.DEFAULT_END, show_default=True, help='评估结束日期')
 @click.option('--layers', type=int, default=10, show_default=True, help='分层回测层数')
-def factor(start, end, layers):
+def factor(factor_name, start, end, layers):
     """因子评估：按因子类型自动分流（num：IC/ICIR + 分层；bool：事件研究）。"""
     from .run_factor import run_factor
     try:
-        factor_path, event_path = run_factor(start=start, end=end, layers=layers)
+        factor_path, event_path = run_factor(
+            start=start, end=end, layers=layers, factor_name=factor_name)
         for p in (factor_path, event_path):
             if p:
                 click.echo(f'因子评估完成：{p}')
