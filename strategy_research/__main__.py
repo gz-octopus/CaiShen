@@ -18,6 +18,7 @@ import click
 from difoss_stock_util import E
 
 from . import __version__, config as cfg_mod
+from .run_event import ENTRIES
 from .strategies import StrategyConfig
 
 CONTEXT_SETTINGS = {'help_option_names': ['-?', '--help', '-h']}
@@ -99,12 +100,17 @@ def backtest(exp_path, strategy, topn, mf, norm, adjust_mode, adjust_cycle,
 @click.option('--start', default=cfg_mod.DEFAULT_START, show_default=True, help='评估起始日期')
 @click.option('--end', default=cfg_mod.DEFAULT_END, show_default=True, help='评估结束日期')
 @click.option('--layers', type=int, default=10, show_default=True, help='分层回测层数')
-def factor(factor_name, start, end, layers):
+@click.option('--entries', '-e', 'entries', multiple=True,
+              type=click.Choice(ENTRIES), default=('d1_open',), show_default=True,
+              help='事件研究入场变体（bool 因子用，可多选）：d1_open=D+1 开盘（基线）｜'
+                   'd_close=D 收盘（尾盘，含 look-ahead 近似）｜d1_close=D+1 收盘｜'
+                   'd1_dip=D+1 低吸（触及涨停 K 线实体中分价成交）')
+def factor(factor_name, start, end, layers, entries):
     """因子评估：按因子类型自动分流（num：IC/ICIR + 分层；bool：事件研究）。"""
     from .run_factor import run_factor
     try:
         factor_path, event_path = run_factor(
-            start=start, end=end, layers=layers, factor_name=factor_name)
+            start=start, end=end, layers=layers, factor_name=factor_name, entries=entries)
         for p in (factor_path, event_path):
             if p:
                 click.echo(f'因子评估完成：{p}')

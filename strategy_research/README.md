@@ -105,6 +105,9 @@ python -m strategy_research backtest -c strategy_research/experiments/tech5.yaml
 
 # 因子评估（按类型自动分流：num 因子 IC/ICIR + 分层约 8 分钟；bool 因子走事件研究）
 python -m strategy_research factor
+
+# 指定【涨停倍量阴】因子回测，同时回测4种入场时机
+python -m strategy_research factor -f limitup_vol2_yin -e d1_open -e d_close -e d1_close -e d1_dip
 ```
 
 ## 命令参考
@@ -158,6 +161,22 @@ factors: []              # 因子子集（空 = 全部注册因子）
 
 股票池过滤自动附加代码前缀白名单（SH 60/68、SZ 00/30），排除指数/基金等非股票标的。
 
+### factor 选项
+
+| 选项 | 取值 | 默认 | 说明 |
+|---|---|---|---|
+| `-f, --factor` | 因子名 | — | 只评估指定因子（默认全部） |
+| `--start` / `--end` | `YYYY-MM-DD` | 2020-01-02 / 2026-08-13 | 评估区间 |
+| `--layers` | 整数 | 10 | 分层回测层数（num 因子） |
+| `-e, --entries` | `d1_open` / `d_close` / `d1_close` / `d1_dip`（可多选） | `d1_open` | 事件研究入场变体（bool 因子） |
+
+事件研究窗口语义：**n = 买入日后第 n 个交易日收盘卖出**（持有 n 日，窗口 [1,3,5,10,20]，全变体 T+1 合规）。入场变体以事件日 D 为基准：`d1_open` = D+1 开盘（基线）；`d_close` = D 收盘（尾盘，信号收盘才严格确认，含 look-ahead 近似，报告内标注）；`d1_close` = D+1 收盘；`d1_dip` = D+1 低吸（D+1 盘中触及涨停 K 线（D-1）实体中分价 (open+close)/2 时按 min(D+1 开盘, 中分价) 成交，未触及事件剔除并报告成交率与触及/未触及对照）。
+
+```powershell
+# 涨停倍量阴：四变体入场时机对比
+python -m strategy_research factor -f limitup_vol2_yin -e d1_open -e d_close -e d1_close -e d1_dip
+```
+
 ## 研究工作流（典型步骤）
 
 1. **选因子**：`factor` 命令按因子类型自动分流评估——num 因子出 IC/ICIR/分层收益，bool 因子出事件后超额收益统计
@@ -166,6 +185,15 @@ factors: []              # 因子子集（空 = 全部注册因子）
 4. **看报告**：report.html 六个区块（头部参数+T+1 声明/指标卡×6/资金曲线 vs 基准/回撤曲线/53 项统计/交易明细），组合模式多调仓明细区块
 5. **对比**：实验记录表查历史 run 的 summary，或者查看报告，报告目录按参数标签区分
 6. **迭代**：改 YAML 或加新因子/新策略，重复 1-5
+
+## 事件研究 vs 策略回测：边界与使用时机
+
+两层以**有无净值路径**为结构性判据划分，共识全文见 [ADR-0001](../docs/adr/0001-event-study-vs-strategy-backtest.md)：
+
+- **因子事件研究**（`factor` 命令 / `run_event.py`）：截面统计，回答「信号平均每笔赚多少」。信号有无信息、参数/时机敏感性测试（含尾盘、低吸等条件成交入场规则）→ 走这里，冻结一切只变一维。
+- **策略回测**（`backtest` 命令）：净值路径，回答「账户曲线长什么样」。净值/回撤/夏普/容量 → 走这里。
+- **升级判据用数据**：事件报告携带每日事件数分布与不可成交剔除比例；两者都小 → 两层必然收敛，策略层可跳过。
+- **硬触发**：上实盘/仿真前必跑策略回测（真实费用、滑点、涨跌停延迟撮合）。
 
 ## 扩展新资产
 

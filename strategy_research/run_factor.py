@@ -82,10 +82,12 @@ def _layer_returns(scores_by_date: list, close_df: pd.DataFrame, layers: int) ->
 
 
 def run_factor(start: str | None = None, end: str | None = None, layers: int = 10,
-               factor_name: str | None = None) -> Path:
+               factor_name: str | None = None,
+               entries: tuple[str, ...] = ('d1_open',)) -> Path:
     """因子评估主入口，输出 html 评估报告。
 
     factor_name 指定时只评估该因子，否则评估全部注册因子。
+    entries：bool 因子事件研究的入场变体（见 run_event.ENTRIES）。
     """
     t0 = time.time()
     config = cfg_mod.init_hikyuu()
@@ -206,14 +208,16 @@ def run_factor(start: str | None = None, end: str | None = None, layers: int = 1
         W('无 num 型因子，跳过因子评估报告')
         out = None
 
-    # bool 因子 → 事件研究（复用股票池与收盘矩阵，另建开盘矩阵）
+    # bool 因子 → 事件研究（复用股票池与收盘矩阵，另建开盘/low 矩阵）
     event_path = None
     bool_names = [n for n in all_names
                   if factors.FACTOR_META[n].get('value_type') == 'bool']
     if bool_names:
         open_df = build_price_matrix(stks, query, 'open')
-        ev_results = study_events(stks, query, open_df, close_df,
-                                  factor_name=factor_name if factor_name else None)
+        low_df = build_price_matrix(stks, query, 'low')
+        ev_results = study_events(stks, query, open_df, close_df, low_df,
+                                  factor_name=factor_name if factor_name else None,
+                                  entries=entries)
         if ev_results:
             event_path = render_event_report(ev_results, config, len(stks), start, end)
         else:
